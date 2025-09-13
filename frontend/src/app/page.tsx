@@ -53,6 +53,7 @@ type ChatMessage = {
   role: "user" | "assistant";
   content: string;
   typing?: boolean;
+  timestamp?: number; // إضافة التوقيت
 };
 type Story = {
   id?: number;
@@ -183,6 +184,7 @@ export default function Home() {
       id: idRef.current++,
       role: "assistant",
       content: "أهلًا! ارفع الـBRD أو ابعتلي نص، وأنا هساعدك.",
+      timestamp: Date.now(), // أضف التوقيت للرسالة الأولى
     },
   ]);
   const composerRef = useRef<HTMLTextAreaElement>(null);
@@ -195,6 +197,9 @@ export default function Home() {
   const [error, setError] = useState<string | null>(null);
   const [theme, setTheme] = useState<"system" | "light" | "dark">("system");
   const [copiedId, setCopiedId] = useState<number | null>(null);
+  const [serverStatus, setServerStatus] = useState<"ok" | "fail" | "loading">(
+    "loading"
+  );
 
   const [opProgress, setOpProgress] = useState<number | null>(null);
   const [opBubble, setOpBubble] = useState<null | {
@@ -218,7 +223,21 @@ export default function Home() {
       "system";
     setTheme(saved);
   }, []);
-
+  useEffect(() => {
+    async function checkServer() {
+      setServerStatus("loading");
+      try {
+        const res = await fetch(getApiBase());
+        if (res.ok) setServerStatus("ok");
+        else setServerStatus("fail");
+      } catch {
+        setServerStatus("fail");
+      }
+    }
+    checkServer();
+    const interval = setInterval(checkServer, 15000); // كل 15 ثانية
+    return () => clearInterval(interval);
+  }, []);
   useEffect(() => {
     localStorage.setItem("theme", theme);
     const root = document.documentElement;
@@ -654,7 +673,13 @@ export default function Home() {
     const msgId = idRef.current++;
     setMessages((p) => [
       ...p,
-      { id: msgId, role: "assistant", content: "جاري التلخيص…", typing: false },
+      {
+        id: msgId,
+        role: "assistant",
+        content: "جاري التلخيص…",
+        typing: false,
+        timestamp: Date.now(),
+      },
     ]);
     setOpBubble({ type: "summarize", msgId });
 
@@ -706,6 +731,7 @@ export default function Home() {
         role: "assistant",
         content: "جارٍ توليد الـUser Stories…",
         typing: false,
+        timestamp: Date.now(),
       },
     ]);
     setOpBubble({ type: "stories", msgId });
@@ -896,6 +922,7 @@ export default function Home() {
         id: idRef.current++,
         role: "user",
         content: raw,
+        timestamp: Date.now(),
       };
       setMessages((p) => [...p, userMsg]);
       if (!overrideText) setInput("");
@@ -903,7 +930,13 @@ export default function Home() {
       const botId = idRef.current++;
       setMessages((p) => [
         ...p,
-        { id: botId, role: "assistant", content: "", typing: true },
+        {
+          id: botId,
+          role: "assistant",
+          content: "",
+          typing: true,
+          timestamp: Date.now(),
+        },
       ]);
 
       try {
@@ -1153,6 +1186,18 @@ export default function Home() {
 
       <div className="col-span-12 -mb-2 flex items-center justify-between">
         <div className="flex items-center gap-2">
+          {/* مؤشر حالة السيرفر */}
+          <span className="flex items-center gap-1 text-xs">
+            {serverStatus === "loading" && (
+              <span className="text-slate-400">جارِ الفحص...</span>
+            )}
+            {serverStatus === "ok" && (
+              <span className="text-emerald-600">متصل ✅</span>
+            )}
+            {serverStatus === "fail" && (
+              <span className="text-red-600">غير متصل ⚠️</span>
+            )}
+          </span>
           <button
             className="inline-flex items-center gap-2 text-slate-600 hover:text-slate-800"
             onClick={() => void refreshAll()}
@@ -1338,6 +1383,11 @@ export default function Home() {
                           {m.content}
                         </ReactMarkdown>
                       )}
+                      <div className="text-[10px] text-slate-400 mt-1">
+                        {m.timestamp
+                          ? new Date(m.timestamp).toLocaleTimeString()
+                          : ""}
+                      </div>
                     </div>
                   </>
                 ) : (
@@ -1367,6 +1417,11 @@ export default function Home() {
                       )}
 
                       {m.typing ? <TypingBubble /> : m.content}
+                      <div className="text-[10px] text-slate-400 mt-1">
+                        {m.timestamp
+                          ? new Date(m.timestamp).toLocaleTimeString()
+                          : ""}
+                      </div>
                     </div>
 
                     <div className="w-8 h-8 rounded-full bg-gray-200 flex items-center justify-center text-gray-700">
@@ -1406,7 +1461,6 @@ export default function Home() {
               {c.icon} {c.label}
             </button>
           ))}
-
         </div>
 
         {showHelp && (
@@ -1467,7 +1521,7 @@ export default function Home() {
               maxHeight: "140px", // تقريبًا 5 أسطر
               overflowY: "auto",
             }}
-            onInput={e => {
+            onInput={(e) => {
               const ta = e.currentTarget;
               ta.style.height = "40px";
               ta.style.height = Math.min(ta.scrollHeight, 140) + "px";
