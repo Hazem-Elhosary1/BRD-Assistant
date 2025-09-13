@@ -38,6 +38,7 @@ import {
 import clsx from "clsx";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
+import mermaid from "mermaid";
 
 /* -------------------------- Config -------------------------- */
 const DEFAULT_API_BASE =
@@ -197,6 +198,9 @@ export default function Home() {
   const [error, setError] = useState<string | null>(null);
   const [theme, setTheme] = useState<"system" | "light" | "dark">("system");
   const [copiedId, setCopiedId] = useState<number | null>(null);
+  const [showFlowchart, setShowFlowchart] = useState(false);
+  const [mermaidCode, setMermaidCode] = useState("");
+  const [flowLoading, setFlowLoading] = useState(false);
   const [serverStatus, setServerStatus] = useState<"ok" | "fail" | "loading">(
     "loading"
   );
@@ -320,7 +324,7 @@ export default function Home() {
   const [appendText, setAppendText] = useState("");
   const [apiKey, setApiKey] = useState<string>("");
   const [apiBaseInput, setApiBaseInput] = useState<string>("");
-
+  const [mermaidSvg, setMermaidSvg] = useState("");
   // Quick command bubbles
   const helpCmds = [
     {
@@ -363,7 +367,7 @@ export default function Home() {
 
   const overlayBusy = isUploading || patchLoading || appendLoading;
   const showOverlay = overlayBusy && !patchOpen && !appendOpen && !settingsOpen;
-
+  const [zoomed, setZoomed] = useState(false);
   // Drag & Drop
   const [dragOver, setDragOver] = useState(false);
 
@@ -538,6 +542,14 @@ export default function Home() {
     []
   );
   useEffect(() => {
+    if (!mermaidCode) return;
+    mermaid.initialize({ startOnLoad: false, theme: "default" });
+    const code = cleanMermaidCode(mermaidCode);
+    mermaid.render("ai-flowchart-svg", code).then(({ svg }) => {
+      setMermaidSvg(svg);
+    });
+  }, [mermaidCode]);
+  useEffect(() => {
     if (!persistEnabled) return;
     persistMessages(messages);
   }, [messages, persistEnabled, persistMessages]);
@@ -666,6 +678,26 @@ export default function Home() {
     return () => window.clearInterval(id);
   }
 
+const handleAIGenerate = async () => {
+  setFlowLoading(true);
+  setMermaidSvg("");
+  try {
+    const res = await fetch(getApiBase() + "/generate-flowchart", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": apiKey, // أضف هذا السطر
+      },
+      body: JSON.stringify({ stories }),
+    });
+    const data = await res.json();
+    setMermaidCode(data.code || "");
+  } catch (e) {
+    toast.error("تعذر توليد الرسم بالذكاء الاصطناعي");
+  } finally {
+    setFlowLoading(false);
+  }
+};
   const doSummarize = useCallback(async (): Promise<void> => {
     setOpLoading(true);
     setError(null);
@@ -1643,6 +1675,13 @@ export default function Home() {
             إضافة Feature/Story
           </ActionButton>
           <ActionButton
+            icon={<ListChecks className="h-4 w-4 text-cyan-600" />}
+            onClick={() => setShowFlowchart(true)}
+            disabled={stories.length === 0}
+          >
+            رسم Flowchart
+          </ActionButton>
+          <ActionButton
             icon={<FileDown className="h-4 w-4 text-slate-700" />}
             onClick={exportPDF}
             disabled={!status.hasBrd}
@@ -2039,6 +2078,7 @@ export default function Home() {
             <div className="flex items-center justify-end gap-2">
               <button
                 onClick={() => setSettingsOpen(false)}
+
                 className="px-3 h-10 rounded-lg border"
               >
                 إلغاء
@@ -2076,6 +2116,119 @@ export default function Home() {
           </motion.div>
         </div>
       )}
+
+      {/* Flowchart Modal */}
+      {showFlowchart && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <motion.div
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="bg-surface rounded-2xl shadow-xl ring-1 ring-line w-[min(700px,96vw)] p-6"
+          >
+            <div className="flex items-center justify-between mb-3">
+              <h4 className="text-lg font-semibold">Flowchart من الـStories</h4>
+              <button
+                onClick={() => setShowFlowchart(false)}
+                className="text-slate-500 hover:text-slate-700"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="flex gap-2 mb-2">
+              <button className="btn btn-primary" onClick={handleAIGenerate} disabled={flowLoading || stories.length === 0}>
+                رسم بالذكاء الاصطناعي
+              </button>
+              <button
+                className="btn btn-ghost"
+                onClick={() => {
+                  const svg = document.querySelector("#ai-flowchart svg");
+                  if (!svg) return;
+                  const serializer = new XMLSerializer();
+                  const svgStr = serializer.serializeToString(svg);
+                  const blob = new Blob([svgStr], { type: "image/svg+xml" });
+                  const url = URL.createObjectURL(blob);
+                  const a = document.createElement("a");
+                  a.href = url;
+                  a.download = "flowchart.svg";
+                  a.click();
+                  URL.revokeObjectURL(url);
+                }}
+              >
+                تحميل الصورة
+              </button>
+              <button className="btn btn-ghost" onClick={() => setZoomed(z => !z)}>
+                {zoomed ? "تصغير" : "تكبير"}
+              </button>
+            </div>
+            {flowLoading ? (
+              <div className="flex items-center justify-center min-h-[300px]">
+                <Spinner className="h-10 w-10 text-blue-600 animate-spin" />
+                <span className="ms-3 text-blue-700 font-semibold">جاري توليد الرسم...</span>
+              </div>
+            ) : (
+              mermaidSvg && (
+                <div
+                  id="ai-flowchart"
+                  style={{
+                    minHeight: 300,
+                    maxHeight: zoomed ? "90vh" : 500,
+                    overflow: "auto",
+                    background: "#fff",
+                    borderRadius: 12,
+                    border: "1px solid #e2e8f0",
+                    padding: 16,
+                  }}
+                  dangerouslySetInnerHTML={{ __html: mermaidSvg }}
+                />
+              )
+            )}
+          </motion.div>
+        </div>
+      )}
     </div>
   );
 }
+
+function MermaidChart({ stories }: { stories: Story[] }) {
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!ref.current) return;
+    const chart = [
+      "graph TD",
+      ...stories.map(
+        (s, i) =>
+          `S${i}["${s.title.replace(/"/g, "'")}"]${i > 0 ? ` --> S${i}` : ""}`
+      ),
+    ].join("\n");
+
+    mermaid.initialize({ startOnLoad: false, theme: "default" });
+    mermaid.render("flowchart", chart).then(({ svg }) => {
+      if (ref.current) ref.current.innerHTML = svg;
+    });
+  }, [stories]);
+
+  return (
+    <div
+      ref={ref}
+      className="overflow-auto bg-white rounded-lg border p-4"
+      style={{ minHeight: 300, maxHeight: 500 }}
+    />
+  );
+}
+
+function cleanMermaidCode(code: string): string {
+  // احذف أي ```mermaid أو ``` أو نص خارج الرسم
+  let cleaned = code.trim();
+  // احذف بداية ونهاية البلوك
+  cleaned = cleaned.replace(/^```mermaid\s*/i, "");
+  cleaned = cleaned.replace(/^```/, "");
+  cleaned = cleaned.replace(/```$/i, "");
+  // احذف أي نص قبل graph أو بعد نهاية الرسم
+  const graphIdx = cleaned.indexOf("graph");
+  if (graphIdx !== -1) {
+    cleaned = cleaned.slice(graphIdx);
+  }
+  return cleaned.trim();
+}
+
