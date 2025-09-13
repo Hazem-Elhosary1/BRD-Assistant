@@ -70,6 +70,17 @@ type Status = {
 };
 
 /* -------------------------- Utils -------------------------- */
+
+function statusBorderClass(s: "ok" | "fail" | "loading") {
+  // كلاس لتلوين حدود أي عنصر (أفاتار/صورة...) حسب حالة الاتصال
+  return clsx(
+    "ring-2",
+    s === "ok" && "ring-emerald-500",
+    s === "fail" && "ring-red-500 animate-pulse",
+    s === "loading" && "ring-yellow-400"
+  );
+}
+
 function extractError(obj: unknown): string | undefined {
   if (obj && typeof obj === "object" && "error" in obj) {
     const val = (obj as Record<string, unknown>).error;
@@ -201,9 +212,14 @@ export default function Home() {
   const [showFlowchart, setShowFlowchart] = useState(false);
   const [mermaidCode, setMermaidCode] = useState("");
   const [flowLoading, setFlowLoading] = useState(false);
+  const [showExportMenu, setShowExportMenu] = useState(false);
   const [serverStatus, setServerStatus] = useState<"ok" | "fail" | "loading">(
     "loading"
   );
+  // حالة اتصال OpenAI
+  const [openAIStatus, setOpenAIStatus] = useState<"ok" | "fail" | "loading">("loading");
+  const [openAIError, setOpenAIError] = useState<string | null>(null);
+
 
   const [opProgress, setOpProgress] = useState<number | null>(null);
   const [opBubble, setOpBubble] = useState<null | {
@@ -242,7 +258,48 @@ export default function Home() {
     const interval = setInterval(checkServer, 15000); // كل 15 ثانية
     return () => clearInterval(interval);
   }, []);
+  
+  // فحص اتصال OpenAI عبر مسار /openai/health وإرسال الـ API Key من الإعدادات
   useEffect(() => {
+    async function checkOpenAI() {
+      setOpenAIStatus("loading");
+      setOpenAIError(null);
+      try {
+        const res = await fetch(`${getApiBase()}/openai/health`, {
+          headers: getHeaders(),
+        });
+        if (res.ok) {
+          try {
+            const d = await res.json();
+            if (d && (d.status === "ok" || d.ok === true)) {
+              setOpenAIStatus("ok");
+            } else {
+              setOpenAIStatus("ok");
+            }
+          } catch {
+            setOpenAIStatus("ok");
+          }
+        } else {
+          let reason = `HTTP ${res.status}`;
+          try {
+            const d = await res.json();
+            const msg = (d?.error?.message) || d?.message;
+            if (msg) reason = msg;
+          } catch {}
+          setOpenAIStatus("fail");
+          setOpenAIError(reason);
+        }
+  } catch (e: unknown) {
+  const msg = e instanceof Error ? e.message : "حدث خطأ غير متوقع";
+  setOpenAIStatus("fail");
+  setOpenAIError(msg);
+}
+    }
+    checkOpenAI();
+    const id = setInterval(checkOpenAI, 15000);
+    return () => clearInterval(id);
+  }, []);
+useEffect(() => {
     localStorage.setItem("theme", theme);
     const root = document.documentElement;
     if (theme === "system") {
@@ -260,12 +317,27 @@ export default function Home() {
   }, []);
   const copyMessage = async (id: number, text: string) => {
     try {
-      await navigator.clipboard.writeText(text);
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        // سياق غير آمن أو المتصفح لا يدعم Clipboard API: استخدم fallback
+        const ta = document.createElement("textarea");
+        ta.value = text;
+        ta.style.position = "fixed";
+        ta.style.left = "-9999px";
+        ta.style.top = "-9999px";
+        document.body.appendChild(ta);
+        ta.focus();
+        ta.select();
+        const ok = document.execCommand("copy");
+        document.body.removeChild(ta);
+        if (!ok) throw new Error("execCommand(copy) failed");
+      }
       setCopiedId(id);
       toast.success("تم نسخ الرسالة");
       setTimeout(() => setCopiedId(null), 1200);
-    } catch {
-      toast.error("تعذّر النسخ");
+    } catch (e) {
+      toast.error("تعذّر النسخ" + (e instanceof Error ? `: ${e.message}` : ""));
     }
   };
 
@@ -886,6 +958,27 @@ const handleAIGenerate = async () => {
     }
   }, []);
 
+  const [exportTypes, setExportTypes] = useState<("pdf" | "docx" | "json")[]>([]);
+  const [exportLoading, setExportLoading] = useState(false);
+
+  const handleExport = useCallback(async () => {
+    setExportLoading(true);
+    try {
+      for (const type of exportTypes) {
+        if (type === "pdf") await exportPDF();
+        if (type === "docx") await exportDocx();
+        if (type === "json") await exportJSON();
+      }
+      toast.success("تم التصدير");
+    } catch {
+      toast.error("تعذر التصدير");
+    } finally {
+      setExportLoading(false);
+      setExportTypes([]);
+    }
+  }, [exportTypes, exportPDF, exportDocx, exportJSON]);
+
+  /* ---------------- Commands ---------------- */
   const handleCommand = useCallback(
     async (cmdLine: string): Promise<boolean> => {
       const cmd = cmdLine.trim().toLowerCase();
@@ -1077,7 +1170,7 @@ const handleAIGenerate = async () => {
             appendType === "story" ? "Story" : "Feature"
           } بنجاح.`,
         },
-      ]);
+      ])
 
       setAppendOpen(false);
       setAppendText("");
@@ -1219,15 +1312,74 @@ const handleAIGenerate = async () => {
       <div className="col-span-12 -mb-2 flex items-center justify-between">
         <div className="flex items-center gap-2">
           {/* مؤشر حالة السيرفر */}
-          <span className="flex items-center gap-1 text-xs">
+          <span
+            title={
+              serverStatus === "ok"
+                ? "الخادم يعمل بشكل طبيعي"
+                : serverStatus === "fail"
+                ? "تعذر الاتصال بالخادم"
+                : "جارِ الفحص..."
+            }
+            className={clsx(
+              "flex items-center gap-1 text-xs font-semibold cursor-help",
+              serverStatus === "ok" && "text-emerald-700",
+              serverStatus === "fail" && "text-red-700",
+              serverStatus === "loading" && "text-yellow-700"
+            )}
+          >
             {serverStatus === "loading" && (
-              <span className="text-slate-400">جارِ الفحص...</span>
+              <>
+                <span className="animate-spin inline-block w-3 h-3 rounded-full bg-yellow-400 me-1"></span>
+                
+          {/* مؤشر اتصال OpenAI */}
+          <span
+            title={
+              openAIStatus === "ok"
+                ? "تم الاتصال بـ OpenAI بنجاح"
+                : openAIStatus === "fail"
+                  ? (openAIError || "تعذّر الاتصال بـ OpenAI")
+                  : "جارِ فحص اتصال OpenAI..."
+            }
+            className={clsx(
+              "flex items-center gap-1 text-xs font-semibold cursor-help",
+              openAIStatus === "ok" && "text-emerald-700",
+              openAIStatus === "fail" && "text-red-700",
+              openAIStatus === "loading" && "text-yellow-700"
+            )}
+          >
+            {openAIStatus === "loading" && (
+              <>
+                <span className="animate-spin inline-block w-3 h-3 rounded-full bg-yellow-400 me-1 border border-yellow-700"></span>
+                <span>OpenAI</span>
+              </>
+            )}
+            {openAIStatus === "ok" && (
+              <>
+                <span className="inline-block w-3 h-3 rounded-full bg-emerald-500 me-1 border border-emerald-700"></span>
+                <span>OpenAI</span>
+              </>
+            )}
+            {openAIStatus === "fail" && (
+              <>
+                <span className="inline-block w-3 h-3 rounded-full bg-red-500 me-1 border border-red-700 animate-pulse"></span>
+                <span>OpenAI</span>
+              </>
+            )}
+          </span>
+جاري الفحص...
+              </>
             )}
             {serverStatus === "ok" && (
-              <span className="text-emerald-600">متصل ✅</span>
+              <>
+                <span className="inline-block w-3 h-3 rounded-full bg-emerald-500 me-1 border border-emerald-700"></span>
+                <span className="text-emerald-700">متصل</span>
+              </>
             )}
             {serverStatus === "fail" && (
-              <span className="text-red-600">غير متصل ⚠️</span>
+              <>
+                <span className="inline-block w-3 h-3 rounded-full bg-red-500 me-1 border border-red-700 animate-pulse"></span>
+                <span className="text-red-700">غير متصل</span>
+              </>
             )}
           </span>
           <button
@@ -1238,13 +1390,7 @@ const handleAIGenerate = async () => {
           </button>
 
           {/* Theme toggle */}
-          <button
-            onClick={toggleTheme}
-            className="px-2 h-8 rounded-lg border text-slate-700 hover:bg-slate-50 dark:text-slate-200 dark:border-slate-700 dark:hover:bg-slate-800"
-            title={dark ? "Light Mode" : "Dark Mode"}
-          >
-            {dark ? "☀️" : "🌙"}
-          </button>
+          
         </div>
 
         <div className="flex items-center gap-2">
@@ -1681,26 +1827,101 @@ const handleAIGenerate = async () => {
           >
             رسم Flowchart
           </ActionButton>
-          <ActionButton
-            icon={<FileDown className="h-4 w-4 text-slate-700" />}
-            onClick={exportPDF}
-            disabled={!status.hasBrd}
-          >
-            Export PDF
-          </ActionButton>
-          <ActionButton
-            icon={<FileText className="h-4 w-4 text-slate-700" />}
-            onClick={exportDocx}
-            disabled={!status.hasBrd}
-          >
-            Export Docx
-          </ActionButton>
-          <ActionButton
-            icon={<Download className="h-4 w-4 text-slate-700" />}
-            onClick={exportJSON}
-          >
-            Export JSON
-          </ActionButton>
+          <div className="relative col-span-2" style={{ minWidth: 0 }}>
+            <button
+              className={clsx(
+                "w-full p-2 rounded-lg border bg-white hover:bg-slate-50 text-slate-700 flex items-center justify-center gap-2",
+                exportLoading && "opacity-60 cursor-not-allowed"
+              )}
+              onClick={() => setShowExportMenu((v) => !v)}
+              disabled={exportLoading}
+              title="تصدير"
+              style={{ minWidth: "160px" }} // عرض ثابت أو حسب الحاجة
+            >
+              <Download className="h-4 w-4 text-slate-700" />
+              {exportLoading ? (
+                <Spinner className="h-4 w-4" />
+              ) : (
+                "تصدير"
+              )}
+            </button>
+            {/* قائمة الصيغ تظهر فقط عند فتح الدروب داون */}
+            {showExportMenu && !exportLoading && (
+              <div
+                className="absolute z-10 mt-2 bg-white border rounded-lg shadow-lg"
+                style={{ width: "100%" }} // نفس عرض الزر
+              >
+                <label className="flex items-center px-4 py-2">
+                  <input
+                    type="checkbox"
+                    checked={exportTypes.includes("pdf")}
+                    onChange={e => {
+                      setExportTypes(types =>
+                        e.target.checked
+                          ? [...types, "pdf"]
+                          : types.filter(t => t !== "pdf")
+                      );
+                    }}
+                  />
+                  <span className="ms-2">PDF</span>
+                </label>
+                <label className="flex items-center px-4 py-2">
+                  <input
+                    type="checkbox"
+                    checked={exportTypes.includes("docx")}
+                    onChange={e => {
+                      setExportTypes(types =>
+                        e.target.checked
+                          ? [...types, "docx"]
+                          : types.filter(t => t !== "docx")
+                      );
+                    }}
+                  />
+                  <span className="ms-2">DOCX</span>
+                </label>
+                <label className="flex items-center px-4 py-2">
+                  <input
+                    type="checkbox"
+                    checked={exportTypes.includes("json")}
+                    onChange={e => {
+                      setExportTypes(types =>
+                        e.target.checked
+                          ? [...types, "json"]
+                          : types.filter(t => t !== "json")
+                      );
+                    }}
+                  />
+                  <span className="ms-2">JSON</span>
+                </label>
+                <button
+                  className="w-full px-4 py-2 bg-blue-600 text-white rounded-b-lg hover:bg-blue-700"
+                  disabled={exportTypes.length === 0}
+                  onClick={async () => {
+                    setExportLoading(true);
+                    try {
+                      for (const type of exportTypes) {
+                        if (type === "pdf") await exportPDF();
+                        if (type === "docx") await exportDocx();
+                        if (type === "json") await exportJSON();
+                      }
+                      toast.success("تم التصدير");
+                    } catch {
+                      toast.error("تعذر التصدير");
+                    } finally {
+                      setExportLoading(false);
+                      setExportTypes([]);
+                      setShowExportMenu(false); // إغلاق الدروب داون بعد التحميل
+                    }
+                  }}
+                >
+                  تحميل
+                </button>
+              </div>
+            )}
+          </div>
+          
+
+          
         </div>
 
         {/* Status */}
@@ -1992,7 +2213,7 @@ const handleAIGenerate = async () => {
                 ✕
               </button>
             </div>
-            <div className="flex items-center gap-3 text-sm mb-2">
+                       <div className="flex items-center gap-3 text-sm mb-2">
               <label className="flex items-center gap-1">
                 <input
                   type="radio"
