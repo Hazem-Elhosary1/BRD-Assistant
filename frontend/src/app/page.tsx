@@ -185,7 +185,7 @@ export default function Home() {
       content: "أهلًا! ارفع الـBRD أو ابعتلي نص، وأنا هساعدك.",
     },
   ]);
-  const composerRef = useRef<HTMLInputElement>(null);
+  const composerRef = useRef<HTMLTextAreaElement>(null);
   const [dark, setDark] = useState(false);
   const [input, setInput] = useState("");
   const [sendLoading, setSendLoading] = useState(false);
@@ -1452,14 +1452,26 @@ export default function Home() {
             Send
           </button>
 
-          <input
+          {/* استبدال input بـ textarea مرنة */}
+          <textarea
             id="composer"
-            ref={composerRef}
-            className="flex-1 border border-line focus:border-blue-400 focus:ring-2 focus:ring-blue-100 rounded-lg h-10 px-3 disabled:bg-gray-100 text-slate-900 placeholder-slate-500"
+            ref={composerRef as React.RefObject<HTMLTextAreaElement>}
+            className="flex-1 border border-line focus:border-blue-400 focus:ring-2 focus:ring-blue-100 rounded-lg px-3 py-2 disabled:bg-gray-100 text-slate-900 placeholder-slate-500 resize-none"
             value={input}
             onChange={(e) => setInput(e.target.value)}
             placeholder="اكتب رسالتك هنا... (جرّب /help)"
             disabled={sendLoading}
+            rows={1}
+            style={{
+              minHeight: "40px",
+              maxHeight: "140px", // تقريبًا 5 أسطر
+              overflowY: "auto",
+            }}
+            onInput={e => {
+              const ta = e.currentTarget;
+              ta.style.height = "40px";
+              ta.style.height = Math.min(ta.scrollHeight, 140) + "px";
+            }}
             onKeyDown={(e) => {
               if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
