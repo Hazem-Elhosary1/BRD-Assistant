@@ -1409,7 +1409,6 @@ export default function Home() {
 
         </div>
 
-{/* تم التعديل المطلوب */}
         {showHelp && (
           <div className="px-3 pb-2 flex flex-wrap gap-2 items-center">
             <span className="text-xs text-slate-500">اختصار سريع:</span>
