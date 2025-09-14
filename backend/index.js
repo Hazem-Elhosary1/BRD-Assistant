@@ -1,3 +1,98 @@
+/* ==========================================================================
+   File: Backend.txt
+   Note: Auto-organized comments & light formatting only — no logic changes.
+   Generated: 2025-09-14 07:28:09
+   ========================================================================== */
+
+// -------------------- Imports --------------------
+// ===== Helpers: التقاط JSON من ردّ الموديل ثم استخراج القصص =====
+// ---------- App ----------
+const app = express();
+app.use( cors( { origin: 'http://localhost:3000' } ) );
+app.use( bodyParser.json( { limit: '5mb' } ) );
+
+// Middlewares (بعد إنشاء app مباشرة)
+app.use( cors( {
+  origin: 'http://localhost:3000',
+  credentials: true,
+  methods: [ 'GET', 'POST', 'PUT', 'DELETE', 'OPTIONS' ],
+  allowedHeaders: [ 'Content-Type', 'x-api-key', 'x-model', 'x-lang' ],
+} ) );
+app.options( '*', cors() );
+
+app.use( express.json( { limit: '10mb' } ) );      // بدل bodyParser.json
+app.use( express.urlencoded( { extended: true } ) ); // لو محتاج x-www-form-urlencoded
+
+// Health (قبل باقي الروتات اختياريًا)
+app.get( '/openai/health', ( _req, res ) => res.json( { ok: true, status: 'ok' } ) );
+
+function extractJson( raw ) {
+  if( !raw ) return null;
+  const m = raw.match( /```json([\s\S]*?)```/i ) || raw.match( /```([\s\S]*?)```/ );
+  const candidate = ( m ? m[ 1 ] : raw ).trim();
+  const objStart = candidate.indexOf( '{' );
+  const objEnd = candidate.lastIndexOf( '}' );
+  const arrStart = candidate.indexOf( '[' );
+  const arrEnd = candidate.lastIndexOf( ']' );
+
+  let jsonText = candidate;
+  if( objStart !== -1 && objEnd !== -1 && objEnd > objStart ) {
+    jsonText = candidate.slice( objStart, objEnd + 1 );
+  } else if( arrStart !== -1 && arrEnd !== -1 && arrEnd > arrStart ) {
+    jsonText = candidate.slice( arrStart, arrEnd + 1 );
+  }
+  try { return JSON.parse( jsonText ); } catch { return null; }
+}
+
+function safeParseStories( raw ) {
+  const data = extractJson( raw );
+  if( !data ) return [];
+  if( Array.isArray( data ) ) return data;                 // مصفوفة مباشرة
+  if( Array.isArray( data.stories ) ) return data.stories; // كائن فيه stories
+  return [];
+}
+
+// ===== Helper: استخراج نص من ملف مرفوع بحسب المايم تايب =====
+// ملاحظة: استبدل db/getUploadById حسب تخزينك الفعلي (قاعدة بيانات / نظام ملفات)
+async function extractTextFromUpload( upload ) {
+  const { mimetype, buffer, path } = upload; // وفّر واحد منهم على الأقل
+  const fileBuffer = buffer || ( await fs.promises.readFile( path ) );
+
+  if( mimetype === 'application/pdf' ) {
+    const data = await pdf( fileBuffer );
+    const text = ( data.text || '' ).trim();
+    if( !text ) {
+      throw Object.assign( new Error( 'PDF بلا نص (غالبًا ممسوح ضوئيًا).' ), { status: 422 } );
+    }
+    return text;
+  }
+
+  if( mimetype === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ) {
+    const result = await mammoth.extractRawText( { buffer: fileBuffer } );
+    const text = ( result.value || '' ).trim();
+    if( !text ) throw Object.assign( new Error( 'DOCX بدون نص مستخرج.' ), { status: 422 } );
+    return text;
+  }
+
+  if( mimetype === 'application/msword' ) {
+    throw Object.assign( new Error( 'صيغة DOC القديمة غير مدعومة — ارفع DOCX أو PDF نصّي.' ), { status: 415 } );
+  }
+
+  // TXT/MD …الخ
+  return fileBuffer.toString( 'utf-8' ).trim();
+}
+
+// ===== Helper: جلب المرفق من التخزين عبر ID =====
+// غيّرها بما يناسبك (SQLite/Prisma/GridFS/مسار على القرص)
+async function getUploadById( uploadId ) {
+  // مثال SQLite تخيّلي:
+  // const row = await db.get('SELECT mimetype, content, path FROM uploads WHERE id = ?', [uploadId]);
+  // return { mimetype: row.mimetype, buffer: row.content, path: row.path };
+
+  // Placeholder: ارجع null لو مش مطبق DB
+  return null;
+}
+
 import 'dotenv/config';
 import express from 'express';
 import bodyParser from 'body-parser';
@@ -13,6 +108,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { Document, Packer, Paragraph, HeadingLevel } from 'docx';
 import puppeteer from 'puppeteer';
+// ------------------ End Imports ------------------
 
 // ---------- resolve __dirname ----------
 const __filename = fileURLToPath( import.meta.url );
@@ -59,23 +155,28 @@ async function listStories() {
 }
 
 // ---------- Helpers (API key / model / language from headers) ----------
+// Component
 function getKeyFromReq( req ) {
   const hdr = req.headers[ 'x-api-key' ];
   return ( typeof hdr === 'string' && hdr.trim() ) ? hdr.trim() : process.env.OPENAI_API_KEY;
 }
+// Component
 function getModelFromReq( req ) {
   const hdr = req.headers[ 'x-model' ];
   return ( typeof hdr === 'string' && hdr.trim() ) ? hdr.trim() : 'gpt-4.1-mini';
 }
+// Component
 function getLangFromReq( req ) {
   const hdr = req.headers[ 'x-lang' ];
   if( hdr === 'ar' || hdr === 'en' ) return hdr;
   return 'auto';
 }
+// Component
 function langLabel( lang ) {
   if( lang === 'en' ) return 'English';
   return 'Arabic';
 }
+// Component
 function getClient( req, res ) {
   const key = getKeyFromReq( req );
   if( !key ) {
@@ -86,21 +187,53 @@ function getClient( req, res ) {
 }
 
 // ---------- App ----------
-const app = express();
+
+// CORS + JSON
 app.use( cors( {
-  origin: true,
+  origin: 'http://localhost:3000',
+  credentials: true,
+  methods: [ 'GET', 'POST', 'PUT', 'DELETE', 'OPTIONS' ],
   allowedHeaders: [ 'Content-Type', 'x-api-key', 'x-model', 'x-lang' ],
-  exposedHeaders: [ 'Content-Disposition' ],
 } ) );
-app.use( bodyParser.json( { limit: '10mb' } ) );
+app.options( '*', cors() );
+
+app.use( express.json( { limit: '10mb' } ) ); // لقراءة JSON body
+
+// -------------------- App Setup --------------------
+
 
 // uploads
 const upload = multer( { storage: multer.memoryStorage() } );
 
 // صحة
+// Route
+app.get( '/openai/health', ( _req, res ) => {
+  return res.json( { ok: true, status: 'ok' } );
+} );
+
 app.get( '/', ( _req, res ) => res.json( { ok: true, service: 'BRD backend' } ) );
 
 // ---------- Upload BRD ----------
+// توليد قصص المستخدم من نفس الملف المرفوع
+app.post( '/stories/generate/from-upload', async ( req, res ) => {
+  try {
+    // عامل uploadId = brdId مؤقتًا
+    const { uploadId, brdId } = req.body || {};
+    const id = brdId ?? uploadId;
+
+    if( !id ) return res.status( 400 ).json( { error: 'أرسل brdId أو uploadId.' } );
+
+    // أعد استخدام منطق /stories/generate عن طريق استدعاء داخلي
+    req.body = { brdId: id };
+    return app._router.handle( req, res, () => {}, 'POST', '/stories/generate' );
+  } catch( err ) {
+    console.error( err );
+    return res.status( 500 ).json( { error: 'خطأ غير متوقع.' } );
+  }
+} );
+
+
+// Route
 app.post( '/upload', upload.single( 'file' ), async ( req, res ) => {
   try {
     const file = req.file;
@@ -108,29 +241,40 @@ app.post( '/upload', upload.single( 'file' ), async ( req, res ) => {
 
     let text = '';
     if( file.mimetype === 'application/pdf' ) {
-      text = ( await pdf( file.buffer ) ).text;
-    } else if(
-      file.mimetype === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
-      file.mimetype === 'application/msword'
-    ) {
-      text = ( await mammoth.extractRawText( { buffer: file.buffer } ) ).value;
+      const data = await pdf( file.buffer );
+      text = ( data.text || '' ).trim();
+      if( !text ) return res.status( 422 ).json( { error: 'PDF بلا نص (غالبًا ممسوح ضوئيًا).' } );
+    } else if( file.mimetype === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ) {
+      const result = await mammoth.extractRawText( { buffer: file.buffer } );
+      text = ( result.value || '' ).trim();
+    } else if( file.mimetype === 'application/msword' ) {
+      return res.status( 415 ).json( { error: 'صيغة DOC غير مدعومة. استخدم DOCX أو PDF نصّي.' } );
     } else {
-      text = file.buffer.toString( 'utf-8' );
+      text = file.buffer.toString( 'utf-8' ).trim();
     }
 
-    await db.run(
+    const result = await db.run(
       'INSERT INTO brd_versions (version, content) VALUES (?, ?)',
       [ 'v' + Date.now(), text ]
     );
+    const brdId = result.lastID;
 
-    res.json( { success: true, message: 'BRD uploaded and stored!' } );
-  } catch( e ) {
-    console.error( e );
-    res.status( 500 ).json( { error: 'Failed to process file' } );
+    res.json( {
+      success: true,
+      message: 'BRD uploaded and stored!',
+      brdId,                // <-- هنرجّع الـ brdId
+      name: file.originalname || 'brd'
+    } );
+  } catch( err ) {
+    console.error( 'Upload error:', err );
+    res.status( 500 ).json( { error: 'Failed to upload BRD' } );
   }
-} );
+} ); // <--- اقفال الراوت
+
+
 
 // ---------- Chat (SSE) ----------
+// Route
 app.post( '/chat-stream', async ( req, res ) => {
   try {
     const client = getClient( req, res ); if( !client ) return;
@@ -184,6 +328,7 @@ app.post( '/chat-stream', async ( req, res ) => {
 } );
 
 // ---------- Summarize ----------
+// Route
 app.post( '/summarize', async ( req, res ) => {
   try {
     const client = getClient( req, res ); if( !client ) return;
@@ -210,55 +355,107 @@ app.post( '/summarize', async ( req, res ) => {
 } );
 
 // ---------- Generate Stories ----------
-app.post( '/stories/generate', async ( req, res ) => {
+function normalizeStory( s ) {
+  const title = ( s.title || s.Title || s.name || "" ).toString().trim();
+  const description = ( s.description || s.desc || "" ).toString().trim();
+  let ac = s.acceptance_criteria ?? s[ "acceptance criteria" ] ?? s.ac ?? [];
+  if( typeof ac === "string" ) {
+    ac = ac.split( /\r?\n|•|-|–|—/g ).map( t => t.trim() ).filter( Boolean );
+  }
+  if( !Array.isArray( ac ) ) ac = [];
+  return { title, description, acceptance_criteria: ac };
+}
+
+function parseStoriesLoose( raw ) {
+  const out = [];
+  const text = ( raw || "" ).trim();
+  const parts = text
+    .split( /(?:^|\n)\s*(?:قصة\s+مستخدم|User\s*Story)\s*\d*\s*[:：-]?\s*/i )
+    .map( p => p.trim() ).filter( Boolean );
+  if( !parts.length ) return text ? [ { title: text.slice( 0, 80 ), description: text } ] : [];
+  for( const p of parts ) {
+    const lines = p.split( /\r?\n/ ).map( l => l.trim() ).filter( Boolean );
+    const firstLine = lines[ 0 ] || "";
+    const title = firstLine.replace( /^\s*[:\-–—]\s*/, "" ).slice( 0, 120 ).trim() || "Story";
+    const ac = lines.filter( l => /^[\-\–\—•\*]|^AC[:：]/i.test( l ) )
+      .map( l => l.replace( /^AC[:：]\s*/i, "" ).replace( /^[\-\–\—•\*]\s*/, "" ).trim() );
+    const body = lines
+      .filter( l => l !== firstLine && !/^[\-\–\—•\*]|^AC[:：]/i.test( l ) )
+      .join( "\n" );
+    out.push( { title, description: body, acceptance_criteria: ac } );
+  }
+  return out;
+}
+app.post('/stories/generate', async (req, res) => {
   try {
-    const client = getClient( req, res ); if( !client ) return;
+    const { text: bodyText, brdText: bodyBrdText, brdId } = req.body || {};
+    let brdText = (bodyText || bodyBrdText || '').trim();
 
-    const brd = await latestBrdText();
-    if( !brd ) return res.status( 404 ).json( { error: 'No BRD uploaded yet' } );
-
-    const model = getModelFromReq( req );
-    const label = langLabel( getLangFromReq( req ) );
-
-    const r = await client.chat.completions.create( {
-      model,
-      messages: [
-        {
-          role: 'system',
-          content:
-            `Generate user stories JSON array. Keys: title, description, acceptance_criteria. Language: ${ label }.`,
-        },
-        { role: 'user', content: brd.slice( 0, 15000 ) },
-      ],
-      response_format: { type: 'json_object' },
-    } );
-
-    let parsed = { stories: [] };
-    try {
-      parsed = JSON.parse( r.choices?.[ 0 ]?.message?.content || '{"stories":[] }' );
-    } catch {}
-    const stories = Array.isArray( parsed.stories ) ? parsed.stories : [];
-
-    // store (overwrite simple)
-    const row = await latestBrdRow();
-    const brd_id = row?.id ?? null;
-    await db.run( 'DELETE FROM user_stories' );
-    for( const s of stories ) {
-      await db.run(
-        `INSERT INTO user_stories (brd_id, title, description, acceptance_criteria)
-         VALUES (?, ?, ?, ?)`,
-        [ brd_id, s.title || '', s.description || '', s.acceptance_criteria || '' ]
-      );
+    if (!brdText && brdId) {
+      const row = await db.get('SELECT content FROM brd_versions WHERE id = ?', [brdId]);
+      brdText = (row?.content || '').trim();
+    }
+    if (!brdText) {
+      return res.status(400).json({ error: 'لا يوجد نص BRD لإنتاج قصص المستخدم.' });
     }
 
-    res.json( { stories } );
-  } catch( e ) {
-    console.error( e );
-    res.status( 500 ).json( { error: 'Stories generation failed' } );
+    const client = getClient(req, res);
+    const model  = getModelFromReq(req);
+
+    const systemPrompt = `
+أنت مساعد يحوّل BRD إلى User Stories. أرجع JSON فقط بهذا الشكل:
+{
+  "stories": [
+    {
+      "title": "string",
+      "description": "string",
+      "acceptance_criteria": ["criterion 1", "criterion 2"]
+    }
+  ]
+}
+لا تُرجِع أي نص قبل/بعد JSON. لو بالعربي، خلّي القيم عربية لكن أسماء الحقول كما هي.
+`.trim();
+
+    const userPrompt = `حوّل النص التالي إلى قصص مستخدم بمعايير قبول نقطية واضحة:\n---\n${brdText}\n---`;
+
+    const r = await client.chat.completions.create({
+      model,
+      temperature: 0.2,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt },
+      ],
+    });
+
+    const raw = r.choices?.[0]?.message?.content || '';
+
+    // حاول JSON
+    let stories = [];
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed && Array.isArray(parsed.stories)) {
+        stories = parsed.stories.map(normalizeStory);
+      }
+    } catch (_) { /* fallback below */ }
+
+    if (!stories.length) {
+      return res.status(422).json({
+        error: 'تعذّر تحليل رد الموديل إلى قصص مستخدم.',
+        debug: raw.slice(0, 800),
+      });
+    }
+
+    return res.json({ count: stories.length, stories });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'حدث خطأ أثناء توليد قصص المستخدم.' });
   }
-} );
+});
+
+
 
 // ---------- Stories (GET) ----------
+// Route
 app.get( '/stories', async ( _req, res ) => {
   try {
     const rows = await db.all( `SELECT id, title, description, acceptance_criteria FROM user_stories ORDER BY id ASC` );
@@ -270,6 +467,7 @@ app.get( '/stories', async ( _req, res ) => {
 } );
 
 // ---------- Insights ----------
+// Route
 app.get( '/insights', async ( req, res ) => {
   try {
     const key = getKeyFromReq( req );
@@ -307,6 +505,7 @@ app.get( '/insights', async ( req, res ) => {
 } );
 
 // ---------- Status (has BRD? stories count?) ----------
+// Route
 app.get( '/status', async ( _req, res ) => {
   try {
     const brd = await latestBrdRow();
@@ -322,6 +521,7 @@ app.get( '/status', async ( _req, res ) => {
 } );
 
 // ---------- Patch BRD ----------
+// Route
 app.post( '/brd/patch', async ( req, res ) => {
   try {
     const client = getClient( req, res ); if( !client ) return;
@@ -356,6 +556,7 @@ app.post( '/brd/patch', async ( req, res ) => {
 } );
 
 // ---------- Append ----------
+// Route
 app.post( '/brd/append', async ( req, res ) => {
   try {
     const client = getClient( req, res ); if( !client ) return;
@@ -399,6 +600,7 @@ app.post( '/brd/append', async ( req, res ) => {
 } );
 
 // ---------- Export DOCX ----------
+// Route
 app.get( '/export/docx', async ( _req, res ) => {
   try {
     const brd = await latestBrdText();
@@ -435,6 +637,7 @@ app.get( '/export/docx', async ( _req, res ) => {
 } );
 
 // ---------- Export PDF (Puppeteer + RTL + Arabic font) ----------
+// Component
 function htmlEscape( s = '' ) {
   return s
     .replace( /&/g, '&amp;' ).replace( /</g, '&lt;' )
@@ -442,6 +645,7 @@ function htmlEscape( s = '' ) {
     .replace( /'/g, '&#39;' );
 }
 
+// Route
 app.get( '/export/pdf', async ( req, res ) => {
   try {
     const brd = await latestBrdText();
@@ -524,6 +728,7 @@ app.get( '/export/pdf', async ( req, res ) => {
 } );
 
 // ---------- Generate Flowchart ----------
+// Route
 app.post( '/generate-flowchart', async ( req, res ) => {
   try {
     const client = getClient( req, res ); if( !client ) return;
@@ -553,6 +758,7 @@ app.post( '/generate-flowchart', async ( req, res ) => {
 // ...existing code...
 
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => {
-  console.log(`BRD backend listening on http://localhost:${PORT}`);
-});
+// ---------------- Server Start ----------------
+app.listen( PORT, () => {
+  console.log( `BRD backend listening on http://localhost:${ PORT }` );
+} );

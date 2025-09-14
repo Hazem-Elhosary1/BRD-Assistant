@@ -165,8 +165,8 @@ textarea::placeholder {
   width: fit-content;
 }
 .bubble-user {
-  background: #eff6ff;
-  color: #1e3a8a;
+  background: #f0e6e7;
+  color: #e2e7f3;
   padding: 0.75rem;
   border-radius: 1rem;
   border-top-left-radius: 0.25rem;
@@ -193,4 +193,133 @@ textarea::placeholder {
 }
 #app-root * {
   pointer-events: auto !important;
+}
+/* ====== Chat bubble tokens (قابلة للتعديل) ====== */
+:root {
+  --bubble-assistant-bg: var(--muted);      /* خلفية مساعد */
+  --bubble-assistant-fg: var(--foreground); /* نص مساعد */
+
+  /* اختَر درجاتك لرسائل اليوزر */
+  --bubble-user-bg: #eaf2ff;    /* أزرق فاتح مثلاً */
+  --bubble-user-fg: #0b3a82;    /* نص داكن مناسب */
+
+  --bubble-radius: 1rem;
+  --bubble-maxw: 75%;
+  --bubble-pad-y: .75rem;
+  --bubble-pad-x: .75rem;
+
+  --avatar-size: 2rem; /* 32px */
+  --chip-h: 2rem;      /* h-8 */
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    /* ممكن تعدّل درجات الدارك لو حابب */
+    --bubble-assistant-bg: #e2eafc;
+    --bubble-assistant-fg: #0f0f0f;
+
+    --bubble-user-bg: #052753;   /* أزرق أغمق */
+    --bubble-user-fg: #ffffff;
+  }
+}
+
+/* ====== Chat row & avatars ====== */
+.msg-row {
+  width: 100%;
+  display: flex;
+  align-items: flex-start;
+  gap: .5rem; /* gap-2 */
+}
+.msg-row--assistant { justify-content: flex-start; }
+.msg-row--user      { justify-content: flex-end;   }
+
+.avatar {
+  width: var(--avatar-size);
+  height: var(--avatar-size);
+  border-radius: 999px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: .9rem;
+}
+.avatar--assistant { background: #dbeafe; color: hsl(225, 48%, 87%); } /* 🤖 */
+.avatar--user      { background: #e5e7eb; color: hsl(225, 48%, 87%); } /* 👤 */
+
+/* ====== Bubbles ====== */
+.bubble {
+  max-width: var(--bubble-maxw);
+  padding: var(--bubble-pad-y) var(--bubble-pad-x);
+  line-height: 1.75;             /* leading-7 */
+  word-break: break-word;        /* break-words */
+  white-space: normal;
+  border-radius: var(--bubble-radius);
+  position: relative;
+}
+
+.bubble--assistant {
+  background: var(--bubble-assistant-bg);
+  color: var(--bubble-assistant-fg);
+  border-top-right-radius: .25rem; /* rounded-tr-sm */
+}
+
+.bubble--user {
+  background: var(--bubble-user-bg);
+  color: var(--bubble-user-fg);
+  border-top-left-radius: .25rem;  /* rounded-tl-sm */
+}
+.msg-row--user { padding-inline-end: .25rem; }
+/* زر النسخ أعلى الفقاعة */
+.bubble .copy-btn {
+  position: absolute;
+  inset-inline-end: -0.5rem;  /* -end-2 */
+  top: -0.5rem;               /* -top-2 */
+  padding: .375rem;           /* p-1.5 */
+  border-radius: 999px;
+  border: 1px solid #e5e7eb;
+  background: rgba(255,255,255,0.9);
+  box-shadow: 0 1px 2px rgba(0,0,0,.06);
+  opacity: 0;
+  transition: opacity .15s ease;
+}
+.bubble:hover .copy-btn { opacity: 1; }
+
+/* توقيت الرسالة */
+.bubble__time {
+  font-size: 10px;
+  color: #94a3b8; /* slate-400 */
+  margin-top: .25rem;
+}
+
+/* ====== Quick chips (اختصارات سريعة) ====== */
+.chips {
+  padding-inline: .75rem; /* px-3 */
+  padding-bottom: .5rem;  /* pb-2 */
+  display: flex; flex-wrap: wrap; gap: .5rem; align-items: center;
+}
+.chips__label { font-size: .75rem; color: #64748b; } /* text-xs slate-500 */
+
+.chip {
+  font-size: .75rem;                 /* text-xs */
+  height: var(--chip-h);             /* h-8 */
+  padding-inline: .75rem;            /* px-3 */
+  border-radius: 999px;              /* rounded-full */
+  display: inline-flex; align-items: center; gap: .25rem;
+  border: 1px solid var(--line, #e2e8f0);
+  background: #fff;
+  color: #334155;
+  transition: filter .15s ease, background .15s ease;
+}
+.chip:hover { filter: brightness(.98); }
+
+.chip--summarize { background:#f3e8ff; border-color:#e9d5ff; color:#7e22ce; }
+.chip--stories   { background:#ecfdf5; border-color:#a7f3d0; color:#047857; }
+.chip--insights  { background:#fffbeb; border-color:#fde68a; color:#b45309; }
+.chip--pdf,
+.chip--docx      { background:#f8fafc; color:#334155; }
+.chip--json      { background:#f0f9ff; border-color:#bae6fd; color:#0369a1; }
+
+.chat-input{
+  min-height:40px;
+  max-height:140px;
+  overflow-y:auto;
+  resize:none;
+  box-sizing:border-box;
 }

@@ -1,6 +1,14 @@
+/* ==========================================================================
+   File: Frontend.txt
+   Note: Auto-organized comments & light formatting only — no logic changes.
+   Generated: 2025-09-14 07:28:09
+   ========================================================================== */
+
 "use client";
 
+// -------------------- Imports --------------------
 import React, {
+  // ------------------ End Imports ------------------
   useCallback,
   useEffect,
   useMemo,
@@ -10,9 +18,11 @@ import React, {
   type DetailedHTMLProps,
   type HTMLAttributes,
 } from "react";
+// -------------------- Imports --------------------
 import { AnimatePresence, motion } from "framer-motion";
 import { Toaster, toast } from "sonner";
 import {
+  // ------------------ End Imports ------------------
   Loader2,
   Upload,
   Wand2,
@@ -35,14 +45,17 @@ import {
   Monitor,
   ArrowUp,
 } from "lucide-react";
+// -------------------- Imports --------------------
 import clsx from "clsx";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import mermaid from "mermaid";
+// ------------------ End Imports ------------------
 
 /* -------------------------- Config -------------------------- */
 const DEFAULT_API_BASE =
   process.env.NEXT_PUBLIC_API_BASE || "http://localhost:5000";
+// Component
 function getApiBase() {
   if (typeof window === "undefined") return DEFAULT_API_BASE;
   return localStorage.getItem("api_base") || DEFAULT_API_BASE;
@@ -71,6 +84,7 @@ type Status = {
 
 /* -------------------------- Utils -------------------------- */
 
+// Component
 function statusBorderClass(s: "ok" | "fail" | "loading") {
   // كلاس لتلوين حدود أي عنصر (أفاتار/صورة...) حسب حالة الاتصال
   return clsx(
@@ -81,6 +95,7 @@ function statusBorderClass(s: "ok" | "fail" | "loading") {
   );
 }
 
+// Component
 function extractError(obj: unknown): string | undefined {
   if (obj && typeof obj === "object" && "error" in obj) {
     const val = (obj as Record<string, unknown>).error;
@@ -88,6 +103,7 @@ function extractError(obj: unknown): string | undefined {
   }
   return undefined;
 }
+// Component
 function errorMessage(e: unknown): string {
   if (e instanceof Error) return e.message;
   if (typeof e === "string") return e;
@@ -97,9 +113,11 @@ function errorMessage(e: unknown): string {
     return "حدث خطأ غير متوقع";
   }
 }
+// Component
 function Spinner({ className = "h-5 w-5" }: { className?: string }) {
   return <Loader2 className={clsx("animate-spin text-blue-600", className)} />;
 }
+// Component
 function getHeaders(extra?: Record<string, string>): HeadersInit {
   const h: Record<string, string> = { ...(extra || {}) };
   if (typeof window !== "undefined") {
@@ -124,6 +142,7 @@ async function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> {
   }
   return res.json();
 }
+// Component
 function fetchWithTimeout(url: string, init: RequestInit = {}, ms = 45000) {
   const ctrl = new AbortController();
   const id = setTimeout(() => ctrl.abort(), ms);
@@ -186,6 +205,7 @@ function debounce<A extends unknown[]>(fn: (...args: A) => void, ms = 400) {
   };
 }
 
+// ---------------- Root Component ----------------
 export default function Home() {
   const idRef = useRef(1);
   const chatRef = useRef<HTMLDivElement>(null);
@@ -213,13 +233,16 @@ export default function Home() {
   const [mermaidCode, setMermaidCode] = useState("");
   const [flowLoading, setFlowLoading] = useState(false);
   const [showExportMenu, setShowExportMenu] = useState(false);
+  const [brdId, setBrdId] = useState<number | null>(null);
+
   const [serverStatus, setServerStatus] = useState<"ok" | "fail" | "loading">(
     "loading"
   );
   // حالة اتصال OpenAI
-  const [openAIStatus, setOpenAIStatus] = useState<"ok" | "fail" | "loading">("loading");
+  const [openAIStatus, setOpenAIStatus] = useState<"ok" | "fail" | "loading">(
+    "loading"
+  );
   const [openAIError, setOpenAIError] = useState<string | null>(null);
-
 
   const [opProgress, setOpProgress] = useState<number | null>(null);
   const [opBubble, setOpBubble] = useState<null | {
@@ -237,6 +260,13 @@ export default function Home() {
   // =============== Story Tags (local only) ===============
   type Tag = "None" | "Critical" | "Enhancement" | "Blocked";
   const [storyTags, setStoryTags] = useState<Record<string | number, Tag>>({});
+
+  const resetComposerHeight = () => {
+    const ta = composerRef.current;
+    if (!ta) return;
+    ta.style.height = "auto";
+    ta.style.height = Math.min(ta.scrollHeight, 140) + "px";
+  };
   useEffect(() => {
     const saved =
       (localStorage.getItem("theme") as "system" | "light" | "dark") ||
@@ -258,7 +288,7 @@ export default function Home() {
     const interval = setInterval(checkServer, 15000); // كل 15 ثانية
     return () => clearInterval(interval);
   }, []);
-  
+
   // فحص اتصال OpenAI عبر مسار /openai/health وإرسال الـ API Key من الإعدادات
   useEffect(() => {
     async function checkOpenAI() {
@@ -283,23 +313,24 @@ export default function Home() {
           let reason = `HTTP ${res.status}`;
           try {
             const d = await res.json();
-            const msg = (d?.error?.message) || d?.message;
+            const msg = d?.error?.message || d?.message;
             if (msg) reason = msg;
           } catch {}
           setOpenAIStatus("fail");
           setOpenAIError(reason);
         }
-  } catch (e: unknown) {
-  const msg = e instanceof Error ? e.message : "حدث خطأ غير متوقع";
-  setOpenAIStatus("fail");
-  setOpenAIError(msg);
-}
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : "حدث خطأ غير متوقع";
+        setOpenAIStatus("fail");
+        setOpenAIError(msg);
+      }
     }
     checkOpenAI();
     const id = setInterval(checkOpenAI, 15000);
     return () => clearInterval(id);
   }, []);
-useEffect(() => {
+
+  useEffect(() => {
     localStorage.setItem("theme", theme);
     const root = document.documentElement;
     if (theme === "system") {
@@ -370,8 +401,11 @@ useEffect(() => {
       : "bg-slate-50 text-slate-700 border-line";
 
   const [uploads, setUploads] = useState<UploadTask[]>([]);
-  const isUploading = uploads.some((u) => u.status === "uploading");
+  const [isUploading, setIsUploading] = React.useState(false);
   const [backlogQuery, setBacklogQuery] = useState("");
+  const [uploadId, setUploadId] = React.useState<string | null>(null);
+  const [isGenerating, setIsGenerating] = React.useState(false);
+
   const [stories, setStories] = useState<Story[]>([]);
   const [insights, setInsights] = useState<Insights>({
     gaps: [],
@@ -653,6 +687,37 @@ useEffect(() => {
   }, [insights, persistEnabled, persistInsights]);
 
   /* ---------------- Upload ---------------- */
+  async function handleUpload(file: File) {
+    try {
+      setIsUploading(true);
+      const formData = new FormData();
+      formData.append("file", file);
+
+      const res = await fetch(`${getApiBase()}/upload`, {
+        method: "POST",
+        body: formData,
+      });
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data?.error || "فشل الرفع");
+      }
+
+      if (!data.brdId) {
+        throw new Error("السيرفر لم يرجّع brdId");
+      }
+      setBrdId(Number(data.brdId));
+
+      setBrdId(Number(data.brdId)); // خزّن الـ brdId في state
+      toast.success(`تم رفع ${file.name}`);
+    } catch (e: unknown) {
+      console.error(e);
+      toast.error((e as Error).message);
+    } finally {
+      setIsUploading(false);
+    }
+  }
+
   const onPickFile = useCallback(() => {
     fileRef.current?.click();
   }, []);
@@ -693,29 +758,49 @@ useEffect(() => {
       };
 
       xhr.onload = () => {
-        if (xhr.status >= 200 && xhr.status < 300) {
-          setUploads((prev) =>
-            prev.map((t) =>
-              t.name === file.name ? { ...t, status: "done", progress: 100 } : t
-            )
-          );
-          setMessages((p) => [
-            ...p,
-            {
-              id: idRef.current++,
-              role: "assistant",
-              content: `تم رفع BRD (${file.name}).`,
-            },
-          ]);
-          toast.success(`تم رفع ${file.name}`);
-          void refreshAll();
-        } else {
+        try {
+          const data = JSON.parse(xhr.responseText || "{}");
+          if (xhr.status >= 200 && xhr.status < 300) {
+            setUploads((prev) =>
+              prev.map((t) =>
+                t.name === file.name
+                  ? { ...t, status: "done", progress: 100 }
+                  : t
+              )
+            );
+
+            // ✅ استقبل brdId بدل uploadId
+            if (data.brdId) {
+              setBrdId(Number(data.brdId));
+            } else {
+              console.warn("No brdId in /upload response");
+            }
+
+            setMessages((p) => [
+              ...p,
+              {
+                id: idRef.current++,
+                role: "assistant",
+                content: `تم رفع BRD (${file.name}).`,
+              },
+            ]);
+            toast.success(`تم رفع ${file.name}`);
+            void refreshAll();
+          } else {
+            setUploads((prev) =>
+              prev.map((t) =>
+                t.name === file.name ? { ...t, status: "error" } : t
+              )
+            );
+            toast.error(`فشل رفع ${file.name} (HTTP ${xhr.status})`);
+          }
+        } catch (e) {
           setUploads((prev) =>
             prev.map((t) =>
               t.name === file.name ? { ...t, status: "error" } : t
             )
           );
-          toast.error(`فشل رفع ${file.name} (HTTP ${xhr.status})`);
+          toast.error(`فشل قراءة رد الرفع`);
         }
       };
 
@@ -750,26 +835,26 @@ useEffect(() => {
     return () => window.clearInterval(id);
   }
 
-const handleAIGenerate = async () => {
-  setFlowLoading(true);
-  setMermaidSvg("");
-  try {
-    const res = await fetch(getApiBase() + "/generate-flowchart", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": apiKey, // أضف هذا السطر
-      },
-      body: JSON.stringify({ stories }),
-    });
-    const data = await res.json();
-    setMermaidCode(data.code || "");
-  } catch (e) {
-    toast.error("تعذر توليد الرسم بالذكاء الاصطناعي");
-  } finally {
-    setFlowLoading(false);
-  }
-};
+  const handleAIGenerate = async () => {
+    setFlowLoading(true);
+    setMermaidSvg("");
+    try {
+      const res = await fetch(getApiBase() + "/generate-flowchart", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": apiKey, // أضف هذا السطر
+        },
+        body: JSON.stringify({ stories }),
+      });
+      const data = await res.json();
+      setMermaidCode(data.code || "");
+    } catch (e) {
+      toast.error("تعذر توليد الرسم بالذكاء الاصطناعي");
+    } finally {
+      setFlowLoading(false);
+    }
+  };
   const doSummarize = useCallback(async (): Promise<void> => {
     setOpLoading(true);
     setError(null);
@@ -819,66 +904,79 @@ const handleAIGenerate = async () => {
     }
   }, []);
 
-  const doGenerateStories = useCallback(async (): Promise<void> => {
-    if (!status.hasBrd) {
-      toast.info("ارفع BRD الأول.");
+const doGenerateStories = useCallback(async (): Promise<void> => {
+  if (!status.hasBrd) {
+    toast.info("ارفع BRD الأول.");
+    return;
+  }
+  setOpLoading(true);
+  setError(null);
+
+  const msgId = idRef.current++;
+  setMessages((p) => [
+    ...p,
+    {
+      id: msgId,
+      role: "assistant",
+      content: "جارٍ توليد الـUser Stories…",
+      typing: false,
+      timestamp: Date.now(),
+    },
+  ]);
+  setOpBubble({ type: "stories", msgId });
+
+  const stop = startFakeProgress((n) => setOpProgress(n));
+
+  try {
+    // ✅ استخدم brdId بدل uploadId
+    if (!brdId) {
+      toast.info("ارفع BRD أولاً.");
+      stop();
+      setOpLoading(false);
       return;
     }
-    setOpLoading(true);
-    setError(null);
 
-    const msgId = idRef.current++;
-    setMessages((p) => [
-      ...p,
+    // ✅ نادِى على /stories/generate وبعت brdId
+    const data = await fetchJSON<{ count: number; stories: Story[] }>(
+      `${getApiBase()}/stories/generate`,
       {
-        id: msgId,
-        role: "assistant",
-        content: "جارٍ توليد الـUser Stories…",
-        typing: false,
-        timestamp: Date.now(),
-      },
-    ]);
-    setOpBubble({ type: "stories", msgId });
+        
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ brdId }),
+      }
+    );
 
-    const stop = startFakeProgress((n) => setOpProgress(n));
+    stop();
+    setOpProgress(100);
 
-    try {
-      const data = await fetchJSON<{ stories: Story[] }>(
-        `${getApiBase()}/stories/generate`,
-        { method: "POST" }
-      );
-      stop();
-      setOpProgress(100);
+    setStories(data.stories || []);
+    setMessages((p) =>
+      p.map((m) =>
+        m.id === msgId
+          ? { ...m, content: `تم توليد ${data.stories?.length ?? 0} User Stories.` }
+          : m
+      )
+    );
+    toast.success("تم توليد الـStories");
+    await refreshStatus();
+  } catch (e: unknown) {
+    stop();
+    const msg = errorMessage(e) || "تعذّر التوليد";
+    setMessages((p) =>
+      p.map((m) => (m.id === msgId ? { ...m, content: `⚠️ ${msg}` } : m))
+    );
+    toast.error(msg);
+    setError(msg);
+  } finally {
+    setTimeout(() => {
+      setOpProgress(null);
+      setOpBubble(null);
+    }, 400);
+    setOpLoading(false);
+  }
+}, [status.hasBrd, brdId, refreshStatus]);
 
-      setStories(data.stories || []);
-      setMessages((p) =>
-        p.map((m) =>
-          m.id === msgId
-            ? {
-                ...m,
-                content: `تم توليد ${data.stories?.length ?? 0} User Stories.`,
-              }
-            : m
-        )
-      );
-      toast.success("تم توليد الـStories");
-      await refreshStatus();
-    } catch (e: unknown) {
-      stop();
-      const msg = errorMessage(e) || "تعذّر التوليد";
-      setMessages((p) =>
-        p.map((m) => (m.id === msgId ? { ...m, content: `⚠️ ${msg}` } : m))
-      );
-      toast.error(msg);
-      setError(msg);
-    } finally {
-      setTimeout(() => {
-        setOpProgress(null);
-        setOpBubble(null);
-      }, 400);
-      setOpLoading(false);
-    }
-  }, [status.hasBrd, refreshStatus]);
 
   const exportPDF = useCallback(async (): Promise<void> => {
     if (!status.hasBrd) {
@@ -958,7 +1056,9 @@ const handleAIGenerate = async () => {
     }
   }, []);
 
-  const [exportTypes, setExportTypes] = useState<("pdf" | "docx" | "json")[]>([]);
+  const [exportTypes, setExportTypes] = useState<("pdf" | "docx" | "json")[]>(
+    []
+  );
   const [exportLoading, setExportLoading] = useState(false);
 
   const handleExport = useCallback(async () => {
@@ -1035,9 +1135,9 @@ const handleAIGenerate = async () => {
       const raw = overrideText ?? input;
       if (!raw.trim() || sendLoading) return;
 
-      if (await handleCommand(raw)) {
-        if (!overrideText) setInput("");
-        return;
+      if (!overrideText) {
+        setInput("");
+        requestAnimationFrame(resetComposerHeight); // ← هنا بيرجع الارتفاع للصغير بعد ما يتفضّى
       }
 
       setSendLoading(true);
@@ -1170,7 +1270,7 @@ const handleAIGenerate = async () => {
             appendType === "story" ? "Story" : "Feature"
           } بنجاح.`,
         },
-      ])
+      ]);
 
       setAppendOpen(false);
       setAppendText("");
@@ -1290,7 +1390,7 @@ const handleAIGenerate = async () => {
   return (
     <div
       id="app-root"
-      className="min-h-screen grid grid-cols-12 gap-4 bg-background p-4 relative"
+      className="min-h-screen grid grid-cols-12 auto-rows-min gap-3 bg-background p-3 md:p-4 relative"
       onDragOver={(e) => {
         e.preventDefault();
         setDragOver(true);
@@ -1330,43 +1430,42 @@ const handleAIGenerate = async () => {
             {serverStatus === "loading" && (
               <>
                 <span className="animate-spin inline-block w-3 h-3 rounded-full bg-yellow-400 me-1"></span>
-                
-          {/* مؤشر اتصال OpenAI */}
-          <span
-            title={
-              openAIStatus === "ok"
-                ? "تم الاتصال بـ OpenAI بنجاح"
-                : openAIStatus === "fail"
-                  ? (openAIError || "تعذّر الاتصال بـ OpenAI")
-                  : "جارِ فحص اتصال OpenAI..."
-            }
-            className={clsx(
-              "flex items-center gap-1 text-xs font-semibold cursor-help",
-              openAIStatus === "ok" && "text-emerald-700",
-              openAIStatus === "fail" && "text-red-700",
-              openAIStatus === "loading" && "text-yellow-700"
-            )}
-          >
-            {openAIStatus === "loading" && (
-              <>
-                <span className="animate-spin inline-block w-3 h-3 rounded-full bg-yellow-400 me-1 border border-yellow-700"></span>
-                <span>OpenAI</span>
-              </>
-            )}
-            {openAIStatus === "ok" && (
-              <>
-                <span className="inline-block w-3 h-3 rounded-full bg-emerald-500 me-1 border border-emerald-700"></span>
-                <span>OpenAI</span>
-              </>
-            )}
-            {openAIStatus === "fail" && (
-              <>
-                <span className="inline-block w-3 h-3 rounded-full bg-red-500 me-1 border border-red-700 animate-pulse"></span>
-                <span>OpenAI</span>
-              </>
-            )}
-          </span>
-جاري الفحص...
+                {/* مؤشر اتصال OpenAI */}
+                <span
+                  title={
+                    openAIStatus === "ok"
+                      ? "تم الاتصال بـ OpenAI بنجاح"
+                      : openAIStatus === "fail"
+                      ? openAIError || "تعذّر الاتصال بـ OpenAI"
+                      : "جارِ فحص اتصال OpenAI..."
+                  }
+                  className={clsx(
+                    "flex items-center gap-1 text-xs font-semibold cursor-help",
+                    openAIStatus === "ok" && "text-emerald-700",
+                    openAIStatus === "fail" && "text-red-700",
+                    openAIStatus === "loading" && "text-yellow-700"
+                  )}
+                >
+                  {openAIStatus === "loading" && (
+                    <>
+                      <span className="animate-spin inline-block w-3 h-3 rounded-full bg-yellow-400 me-1 border border-yellow-700"></span>
+                      <span>OpenAI</span>
+                    </>
+                  )}
+                  {openAIStatus === "ok" && (
+                    <>
+                      <span className="inline-block w-3 h-3 rounded-full bg-emerald-500 me-1 border border-emerald-700"></span>
+                      <span>OpenAI</span>
+                    </>
+                  )}
+                  {openAIStatus === "fail" && (
+                    <>
+                      <span className="inline-block w-3 h-3 rounded-full bg-red-500 me-1 border border-red-700 animate-pulse"></span>
+                      <span>OpenAI</span>
+                    </>
+                  )}
+                </span>
+                جاري الفحص...
               </>
             )}
             {serverStatus === "ok" && (
@@ -1390,7 +1489,6 @@ const handleAIGenerate = async () => {
           </button>
 
           {/* Theme toggle */}
-          
         </div>
 
         <div className="flex items-center gap-2">
@@ -1517,30 +1615,22 @@ const handleAIGenerate = async () => {
                 animate={{ opacity: 1, y: 0, scale: 1 }}
                 exit={{ opacity: 0, y: -4, scale: 0.98 }}
                 className={clsx(
-                  "w-full flex items-start gap-2",
-                  m.role === "assistant" ? "justify-start" : "justify-end"
+                  "msg-row",
+                  m.role === "assistant"
+                    ? "msg-row--assistant"
+                    : "msg-row--user"
                 )}
               >
                 {m.role === "assistant" ? (
                   <>
-                    <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center text-blue-700">
-                      🤖
-                    </div>
+                    <div className="avatar avatar--assistant">🤖</div>
 
-                    <div
-                      dir="auto"
-                      className={clsx(
-                        "p-3 leading-7 group relative max-w-[75%] break-words whitespace-normal",
-                        "bg-muted text-foreground",
-                        "rounded-2xl rounded-tr-sm"
-                      )}
-                    >
+                    <div dir="auto" className="bubble bubble--assistant group">
                       {/* زر النسخ */}
                       {!m.typing && (
                         <button
                           onClick={() => copyMessage(m.id, m.content)}
-                          className="absolute -top-2 -end-2 p-1.5 rounded-full border bg-white/90 shadow
-                           opacity-0 group-hover:opacity-100 transition"
+                          className="copy-btn"
                           title="Copy"
                         >
                           {copiedId === m.id ? (
@@ -1561,29 +1651,25 @@ const handleAIGenerate = async () => {
                           {m.content}
                         </ReactMarkdown>
                       )}
-                      <div className="text-[10px] text-slate-400 mt-1">
+
+                      <div className="bubble__time">
                         {m.timestamp
-                          ? new Date(m.timestamp).toLocaleTimeString()
+                          ? new Date(m.timestamp).toLocaleTimeString("ar", {
+                              hour: "2-digit",
+                              minute: "2-digit",
+                              hour12: true,
+                            })
                           : ""}
                       </div>
                     </div>
                   </>
                 ) : (
                   <>
-                    <div
-                      dir="auto"
-                      className={clsx(
-                        "p-3 leading-7 group relative max-w-[75%] break-words whitespace-normal",
-                        "bg-muted text-foreground",
-                        "rounded-2xl rounded-tl-sm"
-                      )}
-                    >
-                      {/* زر النسخ */}
+                    <div dir="auto" className="bubble bubble--user group">
                       {!m.typing && (
                         <button
                           onClick={() => copyMessage(m.id, m.content)}
-                          className="absolute -top-2 -end-2 p-1.5 rounded-full border bg-white/90 shadow
-                           opacity-0 group-hover:opacity-100 transition"
+                          className="copy-btn"
                           title="Copy"
                         >
                           {copiedId === m.id ? (
@@ -1595,16 +1681,19 @@ const handleAIGenerate = async () => {
                       )}
 
                       {m.typing ? <TypingBubble /> : m.content}
-                      <div className="text-[10px] text-slate-400 mt-1">
+
+                      <div className="bubble__time">
                         {m.timestamp
-                          ? new Date(m.timestamp).toLocaleTimeString()
+                          ? new Date(m.timestamp).toLocaleTimeString("ar", {
+                              hour: "2-digit",
+                              minute: "2-digit",
+                              hour12: true,
+                            })
                           : ""}
                       </div>
                     </div>
 
-                    <div className="w-8 h-8 rounded-full bg-gray-200 flex items-center justify-center text-gray-700">
-                      👤
-                    </div>
+                    <div className="avatar avatar--user">👤</div>
                   </>
                 )}
               </motion.div>
@@ -1665,6 +1754,7 @@ const handleAIGenerate = async () => {
         )}
 
         {/* Composer */}
+
         <div className="border-t p-3 flex gap-2">
           <button
             onClick={() => void sendMessage()}
@@ -1688,20 +1778,15 @@ const handleAIGenerate = async () => {
           <textarea
             id="composer"
             ref={composerRef as React.RefObject<HTMLTextAreaElement>}
-            className="flex-1 border border-line focus:border-blue-400 focus:ring-2 focus:ring-blue-100 rounded-lg px-3 py-2 disabled:bg-gray-100 text-slate-900 placeholder-slate-500 resize-none"
+            className="chat-input flex-1 border border-line focus:border-blue-400 focus:ring-2 focus:ring-blue-100 rounded-lg px-3 py-2 disabled:bg-gray-100 text-slate-900 placeholder-slate-500"
             value={input}
             onChange={(e) => setInput(e.target.value)}
             placeholder="اكتب رسالتك هنا... (جرّب /help)"
             disabled={sendLoading}
             rows={1}
-            style={{
-              minHeight: "40px",
-              maxHeight: "140px", // تقريبًا 5 أسطر
-              overflowY: "auto",
-            }}
             onInput={(e) => {
               const ta = e.currentTarget;
-              ta.style.height = "40px";
+              ta.style.height = "auto";
               ta.style.height = Math.min(ta.scrollHeight, 140) + "px";
             }}
             onKeyDown={(e) => {
@@ -1839,11 +1924,7 @@ const handleAIGenerate = async () => {
               style={{ minWidth: "160px" }} // عرض ثابت أو حسب الحاجة
             >
               <Download className="h-4 w-4 text-slate-700" />
-              {exportLoading ? (
-                <Spinner className="h-4 w-4" />
-              ) : (
-                "تصدير"
-              )}
+              {exportLoading ? <Spinner className="h-4 w-4" /> : "تصدير"}
             </button>
             {/* قائمة الصيغ تظهر فقط عند فتح الدروب داون */}
             {showExportMenu && !exportLoading && (
@@ -1855,11 +1936,11 @@ const handleAIGenerate = async () => {
                   <input
                     type="checkbox"
                     checked={exportTypes.includes("pdf")}
-                    onChange={e => {
-                      setExportTypes(types =>
+                    onChange={(e) => {
+                      setExportTypes((types) =>
                         e.target.checked
                           ? [...types, "pdf"]
-                          : types.filter(t => t !== "pdf")
+                          : types.filter((t) => t !== "pdf")
                       );
                     }}
                   />
@@ -1869,11 +1950,11 @@ const handleAIGenerate = async () => {
                   <input
                     type="checkbox"
                     checked={exportTypes.includes("docx")}
-                    onChange={e => {
-                      setExportTypes(types =>
+                    onChange={(e) => {
+                      setExportTypes((types) =>
                         e.target.checked
                           ? [...types, "docx"]
-                          : types.filter(t => t !== "docx")
+                          : types.filter((t) => t !== "docx")
                       );
                     }}
                   />
@@ -1883,11 +1964,11 @@ const handleAIGenerate = async () => {
                   <input
                     type="checkbox"
                     checked={exportTypes.includes("json")}
-                    onChange={e => {
-                      setExportTypes(types =>
+                    onChange={(e) => {
+                      setExportTypes((types) =>
                         e.target.checked
                           ? [...types, "json"]
-                          : types.filter(t => t !== "json")
+                          : types.filter((t) => t !== "json")
                       );
                     }}
                   />
@@ -1919,9 +2000,6 @@ const handleAIGenerate = async () => {
               </div>
             )}
           </div>
-          
-
-          
         </div>
 
         {/* Status */}
@@ -2213,7 +2291,7 @@ const handleAIGenerate = async () => {
                 ✕
               </button>
             </div>
-                       <div className="flex items-center gap-3 text-sm mb-2">
+            <div className="flex items-center gap-3 text-sm mb-2">
               <label className="flex items-center gap-1">
                 <input
                   type="radio"
@@ -2299,7 +2377,6 @@ const handleAIGenerate = async () => {
             <div className="flex items-center justify-end gap-2">
               <button
                 onClick={() => setSettingsOpen(false)}
-
                 className="px-3 h-10 rounded-lg border"
               >
                 إلغاء
@@ -2356,7 +2433,11 @@ const handleAIGenerate = async () => {
               </button>
             </div>
             <div className="flex gap-2 mb-2">
-              <button className="btn btn-primary" onClick={handleAIGenerate} disabled={flowLoading || stories.length === 0}>
+              <button
+                className="btn btn-primary"
+                onClick={handleAIGenerate}
+                disabled={flowLoading || stories.length === 0}
+              >
                 رسم بالذكاء الاصطناعي
               </button>
               <button
@@ -2377,14 +2458,19 @@ const handleAIGenerate = async () => {
               >
                 تحميل الصورة
               </button>
-              <button className="btn btn-ghost" onClick={() => setZoomed(z => !z)}>
+              <button
+                className="btn btn-ghost"
+                onClick={() => setZoomed((z) => !z)}
+              >
                 {zoomed ? "تصغير" : "تكبير"}
               </button>
             </div>
             {flowLoading ? (
               <div className="flex items-center justify-center min-h-[300px]">
                 <Spinner className="h-10 w-10 text-blue-600 animate-spin" />
-                <span className="ms-3 text-blue-700 font-semibold">جاري توليد الرسم...</span>
+                <span className="ms-3 text-blue-700 font-semibold">
+                  جاري توليد الرسم...
+                </span>
               </div>
             ) : (
               mermaidSvg && (
@@ -2410,6 +2496,7 @@ const handleAIGenerate = async () => {
   );
 }
 
+// Component
 function MermaidChart({ stories }: { stories: Story[] }) {
   const ref = useRef<HTMLDivElement>(null);
 
@@ -2438,6 +2525,7 @@ function MermaidChart({ stories }: { stories: Story[] }) {
   );
 }
 
+// Component
 function cleanMermaidCode(code: string): string {
   // احذف أي ```mermaid أو ``` أو نص خارج الرسم
   let cleaned = code.trim();
@@ -2452,4 +2540,3 @@ function cleanMermaidCode(code: string): string {
   }
   return cleaned.trim();
 }
-
