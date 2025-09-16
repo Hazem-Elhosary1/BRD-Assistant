@@ -51,6 +51,20 @@ function safeParseStories( raw ) {
   if( Array.isArray( data.stories ) ) return data.stories; // كائن فيه stories
   return [];
 }
+// ===== Helper: encode/decode acceptance_criteria (JSON in DB) =====
+function encodeAC( ac ) {
+  return JSON.stringify( Array.isArray( ac ) ? ac : ( ac ? [ String( ac ) ] : [] ) );
+}
+function decodeAC( text ) {
+  if( !text ) return [];
+  try {
+    const v = JSON.parse( text );
+    return Array.isArray( v ) ? v : [];
+  } catch {
+    // دعم قديم لو كانت محفوظة كسطور نص
+    return String( text ).split( /\r?\n/ ).map( s => s.trim() ).filter( Boolean );
+  }
+}
 
 // ===== Helper: استخراج نص من ملف مرفوع بحسب المايم تايب =====
 // ملاحظة: استبدل db/getUploadById حسب تخزينك الفعلي (قاعدة بيانات / نظام ملفات)
@@ -205,7 +219,19 @@ app.use( express.json( { limit: '10mb' } ) ); // لقراءة JSON body
 // uploads
 const upload = multer( { storage: multer.memoryStorage() } );
 
-// صحة
+app.delete( '/stories/:id', async ( req, res ) => {
+  try {
+    const { id } = req.params;
+    if( !id ) return res.status( 400 ).json( { error: 'Story id is required' } );
+
+    await db.run( `DELETE FROM user_stories WHERE id = ?`, [ id ] );
+
+    res.json( { ok: true } );
+  } catch( e ) {
+    console.error( e );
+    res.status( 500 ).json( { error: 'Delete failed' } );
+  }
+} );
 // Route
 app.get( '/openai/health', ( _req, res ) => {
   return res.json( { ok: true, status: 'ok' } );
@@ -300,7 +326,7 @@ app.post( '/chat-stream', async ( req, res ) => {
     const systemPrompt =
       `You are a senior BA assistant.\n` +
       `You have access to the following BRD context (may be empty):\n` +
-      `"""${ brd?.slice( 0, 15000 ) || 'NO_BRD_UPLOADED' }"""\n` +
+      `"""${ brd?.slice( 0, 100000 ) || 'NO_BRD_UPLOADED' }"""\n` +
       `Answer based ONLY on the BRD when the user asks about its content.\n` +
       `If info is missing, say you don't have it and suggest to upload/clarify.\n` +
       `${ langLine }`;
@@ -343,7 +369,7 @@ app.post( '/summarize', async ( req, res ) => {
       model,
       messages: [
         { role: 'system', content: `Summarize the BRD in ${ label } bullets (max 10).` },
-        { role: 'user', content: brd.slice( 0, 15000 ) },
+        { role: 'user', content: brd.slice( 0, 100000 ) },
       ],
     } );
     const summary = r.choices?.[ 0 ]?.message?.content || 'لم أستطع التلخيص.';
@@ -386,21 +412,21 @@ function parseStoriesLoose( raw ) {
   }
   return out;
 }
-app.post('/stories/generate', async (req, res) => {
+app.post( '/stories/generate', async ( req, res ) => {
   try {
     const { text: bodyText, brdText: bodyBrdText, brdId } = req.body || {};
-    let brdText = (bodyText || bodyBrdText || '').trim();
+    let brdText = ( bodyText || bodyBrdText || '' ).trim();
 
-    if (!brdText && brdId) {
-      const row = await db.get('SELECT content FROM brd_versions WHERE id = ?', [brdId]);
-      brdText = (row?.content || '').trim();
+    if( !brdText && brdId ) {
+      const row = await db.get( 'SELECT content FROM brd_versions WHERE id = ?', [ brdId ] );
+      brdText = ( row?.content || '' ).trim();
     }
-    if (!brdText) {
-      return res.status(400).json({ error: 'لا يوجد نص BRD لإنتاج قصص المستخدم.' });
+    if( !brdText ) {
+      return res.status( 400 ).json( { error: 'لا يوجد نص BRD لإنتاج قصص المستخدم.' } );
     }
 
-    const client = getClient(req, res);
-    const model  = getModelFromReq(req);
+    const client = getClient( req, res );
+    const model = getModelFromReq( req );
 
     const systemPrompt = `
 أنت مساعد يحوّل BRD إلى User Stories. أرجع JSON فقط بهذا الشكل:
@@ -416,53 +442,137 @@ app.post('/stories/generate', async (req, res) => {
 لا تُرجِع أي نص قبل/بعد JSON. لو بالعربي، خلّي القيم عربية لكن أسماء الحقول كما هي.
 `.trim();
 
-    const userPrompt = `حوّل النص التالي إلى قصص مستخدم بمعايير قبول نقطية واضحة:\n---\n${brdText}\n---`;
+    const userPrompt = `حوّل النص التالي إلى قصص مستخدم بمعايير قبول نقطية واضحة:\n---\n${ brdText }\n---`;
 
-    const r = await client.chat.completions.create({
+    const r = await client.chat.completions.create( {
       model,
       temperature: 0.2,
       messages: [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userPrompt },
       ],
-    });
+    } );
 
-    const raw = r.choices?.[0]?.message?.content || '';
+    const raw = r.choices?.[ 0 ]?.message?.content || '';
 
     // حاول JSON
     let stories = [];
     try {
-      const parsed = JSON.parse(raw);
-      if (parsed && Array.isArray(parsed.stories)) {
-        stories = parsed.stories.map(normalizeStory);
+      const parsed = JSON.parse( raw );
+      if( parsed && Array.isArray( parsed.stories ) ) {
+        stories = parsed.stories.map( normalizeStory );
       }
-    } catch (_) { /* fallback below */ }
+    } catch( _ ) { /* fallback below */ }
 
-    if (!stories.length) {
-      return res.status(422).json({
+    if( !stories.length ) {
+      return res.status( 422 ).json( {
         error: 'تعذّر تحليل رد الموديل إلى قصص مستخدم.',
-        debug: raw.slice(0, 800),
-      });
+        debug: raw.slice( 0, 800 ),
+      } );
     }
-
-    return res.json({ count: stories.length, stories });
-  } catch (e) {
-    console.error(e);
-    return res.status(500).json({ error: 'حدث خطأ أثناء توليد قصص المستخدم.' });
+    if( String( req.query.save ) === 'true' ) {
+      const bid = ( await latestBrdRow() )?.id ?? null;
+      const stmt2 = await db.prepare( `
+    INSERT INTO user_stories (brd_id, title, description, acceptance_criteria)
+    VALUES (?, ?, ?, ?)
+  `);
+      try {
+        for( const s of stories ) {
+          await stmt2.run( bid, s.title, s.description, encodeAC( s.acceptance_criteria ) );
+        }
+      } finally {
+        await stmt2.finalize();
+      }
+    }
+    return res.json( { count: stories.length, stories } );
+  } catch( e ) {
+    console.error( e );
+    return res.status( 500 ).json( { error: 'حدث خطأ أثناء توليد قصص المستخدم.' } );
   }
-});
+
+} );
 
 
 
 // ---------- Stories (GET) ----------
 // Route
+// ---------- Stories (GET) ----------
 app.get( '/stories', async ( _req, res ) => {
   try {
-    const rows = await db.all( `SELECT id, title, description, acceptance_criteria FROM user_stories ORDER BY id ASC` );
-    res.json( { stories: rows } );
+    const rows = await db.all( `
+      SELECT id, title, description, acceptance_criteria
+      FROM user_stories
+      ORDER BY id ASC
+    `);
+    const stories = rows.map( r => ( {
+      id: r.id,
+      title: r.title || '',
+      description: r.description || '',
+      acceptance_criteria: decodeAC( r.acceptance_criteria ),
+    } ) );
+    res.json( { stories } );
   } catch( e ) {
     console.error( e );
     res.status( 500 ).json( { stories: [] } );
+  }
+} );
+
+// ---------- Update Story ----------
+// Route
+app.put( '/stories/:id', async ( req, res ) => {
+  try {
+    const { id } = req.params;
+    const { title, description, acceptance_criteria } = req.body || {};
+
+    if( !id ) return res.status( 400 ).json( { error: 'Story id is required' } );
+
+    await db.run(
+      `UPDATE user_stories
+       SET title = ?, description = ?, acceptance_criteria = ?
+       WHERE id = ?`,
+      [
+        title?.trim() || '',
+        description?.trim() || '',
+        JSON.stringify( acceptance_criteria || [] ),
+        id
+      ]
+    );
+
+    res.json( { ok: true } );
+  } catch( e ) {
+    console.error( e );
+    res.status( 500 ).json( { error: 'Update failed' } );
+  }
+} );
+
+// ---------- Stories (BULK SAVE) ----------
+app.post( '/stories/bulk', async ( req, res ) => {
+  try {
+    const { stories, brdId } = req.body ?? {};
+    if( !Array.isArray( stories ) || stories.length === 0 ) {
+      return res.status( 400 ).json( { error: 'stories array required' } );
+    }
+    const bid = brdId ?? ( await latestBrdRow() )?.id ?? null;
+
+    const stmt = await db.prepare( `
+      INSERT INTO user_stories (brd_id, title, description, acceptance_criteria)
+      VALUES (?, ?, ?, ?)
+    `);
+    try {
+      for( const s of stories ) {
+        const title = ( s.title ?? '' ).toString().trim();
+        const description = ( s.description ?? '' ).toString().trim();
+        const ac = encodeAC( s.acceptance_criteria );
+        await stmt.run( bid, title, description, ac );
+      }
+    } finally {
+      await stmt.finalize();
+    }
+
+    res.json( { ok: true, inserted: stories.length } );
+  } catch( e ) {
+    console.error( e );
+    res.status( 500 ).json( { error: 'bulk save failed' } );
   }
 } );
 
@@ -487,7 +597,7 @@ app.get( '/insights', async ( req, res ) => {
           content:
             `Extract three lists (JSON): gaps, risks, metrics from this BRD; each 0-5 short ${ label } items.`,
         },
-        { role: 'user', content: brd.slice( 0, 12000 ) },
+        { role: 'user', content: brd.slice( 0, 100000 ) },
       ],
       response_format: { type: 'json_object' },
     } );
@@ -541,7 +651,7 @@ app.post( '/brd/patch', async ( req, res ) => {
           content:
             'You will patch the given BRD. Output ONLY the full updated BRD (no comments). Language: keep the original.',
         },
-        { role: 'user', content: `BRD:\n"""${ brd.slice( 0, 15000 ) }"""` },
+        { role: 'user', content: `BRD:\n"""${ brd.slice( 0, 100000 ) }"""` },
         { role: 'user', content: `Patch section "${ section }" as follows:\n${ instruction }` },
       ],
     } );
@@ -585,7 +695,7 @@ app.post( '/brd/append', async ( req, res ) => {
           content:
             'Append the following feature to the BRD in the correct section (create a section if needed). Output ONLY the full updated BRD.',
         },
-        { role: 'user', content: `BRD:\n"""${ brd.slice( 0, 14000 ) }"""` },
+        { role: 'user', content: `BRD:\n"""${ brd.slice( 0, 100000 ) }"""` },
         { role: 'user', content: `FEATURE:\n${ content }` },
       ],
     } );

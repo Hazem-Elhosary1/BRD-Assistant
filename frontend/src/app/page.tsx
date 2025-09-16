@@ -70,11 +70,12 @@ type ChatMessage = {
   timestamp?: number; // إضافة التوقيت
 };
 type Story = {
-  id?: number;
+  id?: number | string;
   title: string;
   description?: string;
-  acceptance_criteria?: string;
+  acceptance_criteria?: string[];
 };
+
 type Insights = { gaps: string[]; risks: string[]; metrics: string[] };
 type Status = {
   hasBrd: boolean;
@@ -234,7 +235,11 @@ export default function Home() {
   const [flowLoading, setFlowLoading] = useState(false);
   const [showExportMenu, setShowExportMenu] = useState(false);
   const [brdId, setBrdId] = useState<number | null>(null);
-
+  const [selectedStory, setSelectedStory] = useState<Story | null>(null);
+  const [open, setOpen] = useState(false);
+  const [formTitle, setFormTitle] = useState("");
+  const [formDesc, setFormDesc] = useState("");
+  const [formAC, setFormAC] = useState("");
   const [serverStatus, setServerStatus] = useState<"ok" | "fail" | "loading">(
     "loading"
   );
@@ -251,6 +256,9 @@ export default function Home() {
   }>(null);
   const [persistEnabled] = useState(true);
   const [showScrollTop, setShowScrollTop] = useState(false);
+const [editMode, setEditMode] = useState(false);
+const [saving, setSaving] = useState(false);
+const [savedTick, setSavedTick] = useState(false);
 
   type UploadTask = {
     name: string;
@@ -329,6 +337,94 @@ export default function Home() {
     const id = setInterval(checkOpenAI, 15000);
     return () => clearInterval(id);
   }, []);
+ function openModal(story: Story) {
+  setSelectedStory(story);
+  setEditMode(false);           // ← يبدأ كعرض فقط
+  setOpen(true);
+}
+function closeModal() {
+    setSelectedStory(null);
+    setOpen(false);
+  }
+  // لما تفتح المودال حبّيذ تملَى الفورم من الستوري المختارة
+  useEffect(() => {
+    if (!selectedStory) {
+      setFormTitle("");
+      setFormDesc("");
+      setFormAC("");
+      return;
+    }
+    setFormTitle(selectedStory.title ?? "");
+    setFormDesc(selectedStory.description ?? "");
+    setFormAC(
+      Array.isArray(selectedStory.acceptance_criteria)
+        ? selectedStory.acceptance_criteria.join("\n")
+        : selectedStory.acceptance_criteria ?? ""
+    );
+  }, [selectedStory]);
+
+async function saveStory() {
+  if (!selectedStory?.id) return;
+  const nacArr = formAC.split(/\r?\n/).map(t => t.trim()).filter(Boolean);
+
+  try {
+    setSaving(true);
+    const res = await fetch(`${getApiBase()}/stories/${selectedStory.id}`, {
+      method: "PUT",
+      headers: getHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({
+        title: formTitle,
+        description: formDesc,
+        acceptance_criteria: nacArr,
+      }),
+    });
+    if (!res.ok) {
+      const msg = await res.text().catch(() => "");
+      throw new Error(`Update failed: ${res.status} ${msg}`);
+    }
+
+    // تحديث محلي سريع
+    setStories(list =>
+      list.map(x =>
+        x.id === selectedStory.id
+          ? { ...x, title: formTitle, description: formDesc, acceptance_criteria: nacArr }
+          : x
+      )
+    );
+
+    await refreshStories?.();      // توحيد مع السيرفر
+    toast.success("تم حفظ التعديل");
+    setEditMode(false);            // ← ارجع لوضع العرض
+    setSavedTick(true);            // ← إظهار "تم" لحظيًا
+    setTimeout(() => setSavedTick(false), 1200);
+  } catch {
+    toast.error("فشل حفظ التعديل");
+  } finally {
+    setSaving(false);
+  }
+}
+
+
+  async function hardDeleteStory() {
+    if (!selectedStory?.id) return;
+    try {
+      const res = await fetch(`${getApiBase()}/stories/${selectedStory.id}`, {
+        method: "DELETE",
+        headers: getHeaders(),
+      });
+      if (!res.ok) {
+        const msg = await res.text().catch(() => "");
+        throw new Error(`Delete failed: ${res.status} ${msg}`);
+      }
+
+      setStories((list) => list.filter((x) => x.id !== selectedStory.id));
+      await refreshStories?.();
+      toast.success("تم الحذف");
+      closeModal();
+    } catch {
+      toast.error("فشل الحذف");
+    }
+  }
 
   useEffect(() => {
     localStorage.setItem("theme", theme);
@@ -497,14 +593,31 @@ export default function Home() {
       setApiBaseInput(getApiBase());
     }
   }, []);
+  {
+    helpCmds.map((c, i) => (
+      <button key={`${c.insert}-${i}`} /* ... */>
+        {c.icon} {c.label}
+      </button>
+    ));
+  }
 
   const filteredStories = useMemo(() => {
     const q = backlogQuery.trim().toLowerCase();
     if (!q) return stories;
+
+    // norm: يحوّل أي قيمة لستـرنج
+    const norm = (v: unknown): string => {
+      if (Array.isArray(v)) {
+        return v.map((x) => norm(x)).join(" "); // recursion لكن return دايمًا string
+      }
+      if (v == null) return "";
+      return String(v);
+    };
+
     return stories.filter((s) =>
       [s.title, s.description, s.acceptance_criteria]
-        .filter(Boolean)
-        .some((t) => (t || "").toLowerCase().includes(q))
+        .filter((x) => x != null)
+        .some((t) => norm(t).toLowerCase().includes(q))
     );
   }, [stories, backlogQuery]);
 
@@ -904,79 +1017,79 @@ export default function Home() {
     }
   }, []);
 
-const doGenerateStories = useCallback(async (): Promise<void> => {
-  if (!status.hasBrd) {
-    toast.info("ارفع BRD الأول.");
-    return;
-  }
-  setOpLoading(true);
-  setError(null);
-
-  const msgId = idRef.current++;
-  setMessages((p) => [
-    ...p,
-    {
-      id: msgId,
-      role: "assistant",
-      content: "جارٍ توليد الـUser Stories…",
-      typing: false,
-      timestamp: Date.now(),
-    },
-  ]);
-  setOpBubble({ type: "stories", msgId });
-
-  const stop = startFakeProgress((n) => setOpProgress(n));
-
-  try {
-    // ✅ استخدم brdId بدل uploadId
-    if (!brdId) {
-      toast.info("ارفع BRD أولاً.");
-      stop();
-      setOpLoading(false);
+  const doGenerateStories = useCallback(async (): Promise<void> => {
+    if (!status.hasBrd) {
+      toast.info("ارفع BRD الأول.");
       return;
     }
+    setOpLoading(true);
+    setError(null);
 
-    // ✅ نادِى على /stories/generate وبعت brdId
-    const data = await fetchJSON<{ count: number; stories: Story[] }>(
-      `${getApiBase()}/stories/generate`,
+    const msgId = idRef.current++;
+    setMessages((p) => [
+      ...p,
       {
-        
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ brdId }),
+        id: msgId,
+        role: "assistant",
+        content: "جارٍ توليد الـUser Stories…",
+        typing: false,
+        timestamp: Date.now(),
+      },
+    ]);
+    setOpBubble({ type: "stories", msgId });
+
+    const stop = startFakeProgress((n) => setOpProgress(n));
+
+    try {
+      // ✅ استخدم brdId بدل uploadId
+      if (!brdId) {
+        toast.info("ارفع BRD أولاً.");
+        stop();
+        setOpLoading(false);
+        return;
       }
-    );
 
-    stop();
-    setOpProgress(100);
+      const data = await fetchJSON<{ count: number; stories: Story[] }>(
+        `${getApiBase()}/stories/generate?save=true`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ brdId }),
+        }
+      );
 
-    setStories(data.stories || []);
-    setMessages((p) =>
-      p.map((m) =>
-        m.id === msgId
-          ? { ...m, content: `تم توليد ${data.stories?.length ?? 0} User Stories.` }
-          : m
-      )
-    );
-    toast.success("تم توليد الـStories");
-    await refreshStatus();
-  } catch (e: unknown) {
-    stop();
-    const msg = errorMessage(e) || "تعذّر التوليد";
-    setMessages((p) =>
-      p.map((m) => (m.id === msgId ? { ...m, content: `⚠️ ${msg}` } : m))
-    );
-    toast.error(msg);
-    setError(msg);
-  } finally {
-    setTimeout(() => {
-      setOpProgress(null);
-      setOpBubble(null);
-    }, 400);
-    setOpLoading(false);
-  }
-}, [status.hasBrd, brdId, refreshStatus]);
+      stop();
+      setOpProgress(100);
 
+      setStories(data.stories || []);
+      setMessages((p) =>
+        p.map((m) =>
+          m.id === msgId
+            ? {
+                ...m,
+                content: `تم توليد ${data.stories?.length ?? 0} User Stories.`,
+              }
+            : m
+        )
+      );
+      toast.success("تم توليد الـStories");
+      await refreshStatus();
+    } catch (e: unknown) {
+      stop();
+      const msg = errorMessage(e) || "تعذّر التوليد";
+      setMessages((p) =>
+        p.map((m) => (m.id === msgId ? { ...m, content: `⚠️ ${msg}` } : m))
+      );
+      toast.error(msg);
+      setError(msg);
+    } finally {
+      setTimeout(() => {
+        setOpProgress(null);
+        setOpBubble(null);
+      }, 400);
+      setOpLoading(false);
+    }
+  }, [status.hasBrd, brdId, refreshStatus]);
 
   const exportPDF = useCallback(async (): Promise<void> => {
     if (!status.hasBrd) {
@@ -1599,7 +1712,7 @@ const doGenerateStories = useCallback(async (): Promise<void> => {
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: 10 }}
                 onClick={scrollToTop}
-                className="absolute bottom-20 right-4 p-2 rounded-full shadow-lg border bg-white hover:bg-slate-50"
+                className="absolute  right-[50%] bottom-[20%] p-2 rounded-full shadow-lg border bg-white hover:bg-slate-50 z-50 "
                 title="العودة لأعلى"
               >
                 <ArrowUp className="w-5 h-5 text-slate-700" />
@@ -2045,7 +2158,9 @@ const doGenerateStories = useCallback(async (): Promise<void> => {
               pagedStories.map((s) => (
                 <li
                   key={s.id ?? s.title}
-                  className="p-2 border rounded-lg hover:bg-slate-50"
+                  className="p-2 border rounded-lg hover:bg-slate-50 cursor-pointer"
+                  onClick={() => openModal(s)}
+                  title="اضغط للتعديل أو الحذف"
                 >
                   <div className="flex items-start justify-between gap-2">
                     {/* يسار: تفاصيل الستوري */}
@@ -2060,12 +2175,18 @@ const doGenerateStories = useCallback(async (): Promise<void> => {
 
                       {s.acceptance_criteria && (
                         <div className="text-slate-500 text-xs mt-1">
-                          AC: {s.acceptance_criteria}
+                          AC:{" "}
+                          {Array.isArray(s.acceptance_criteria)
+                            ? s.acceptance_criteria.join(", ")
+                            : s.acceptance_criteria}
                         </div>
                       )}
 
                       {/* سطر التاج */}
-                      <div className="flex items-center gap-2 mt-2">
+                      <div
+                        className="flex items-center gap-2 mt-2"
+                        onClick={(e) => e.stopPropagation()} // عشان متفتحش المودال
+                      >
                         <span
                           className={clsx(
                             "text-[11px] border rounded-full px-2 py-0.5",
@@ -2091,72 +2212,8 @@ const doGenerateStories = useCallback(async (): Promise<void> => {
                       </div>
                     </div>
 
-                    {/* يمين: أزرار الإجراء */}
-                    <div className="flex items-center gap-1 opacity-70">
-                      <button
-                        className="p-1 hover:bg-slate-100 rounded"
-                        title="Edit"
-                        onClick={async () => {
-                          const nt =
-                            prompt("Edit title", s.title ?? "") ?? s.title;
-                          const nd =
-                            prompt("Edit description", s.description ?? "") ??
-                            s.description;
-                          const nac =
-                            prompt(
-                              "Edit acceptance criteria",
-                              s.acceptance_criteria ?? ""
-                            ) ?? s.acceptance_criteria;
-
-                          setStories((list) =>
-                            list.map((x) =>
-                              x.id === s.id
-                                ? {
-                                    ...x,
-                                    title: nt!,
-                                    description: nd!,
-                                    acceptance_criteria: nac!,
-                                  }
-                                : x
-                            )
-                          );
-
-                          try {
-                            await fetch(`${getApiBase()}/stories/${s.id}`, {
-                              method: "PUT",
-                              headers: getHeaders({
-                                "Content-Type": "application/json",
-                              }),
-                              body: JSON.stringify({
-                                title: nt,
-                                description: nd,
-                                acceptance_criteria: nac,
-                              }),
-                            });
-                          } catch {}
-                        }}
-                      >
-                        <Edit3 className="w-4 h-4" />
-                      </button>
-
-                      <button
-                        className="p-1 hover:bg-slate-100 rounded"
-                        title="Delete"
-                        onClick={async () => {
-                          setStories((list) =>
-                            list.filter((x) => x.id !== s.id)
-                          );
-                          try {
-                            await fetch(`${getApiBase()}/stories/${s.id}`, {
-                              method: "DELETE",
-                              headers: getHeaders(),
-                            });
-                          } catch {}
-                        }}
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    </div>
+                    {/* يمين: مؤشر بسيط */}
+                    <div className="opacity-50 text-xs">تفاصيل</div>
                   </div>
                 </li>
               ))
@@ -2164,6 +2221,7 @@ const doGenerateStories = useCallback(async (): Promise<void> => {
               <li className="text-slate-400">لا توجد Stories بعد.</li>
             )}
           </ul>
+
           <div className="flex items-center justify-between text-xs mt-2">
             <button
               className="px-2 h-7 rounded border"
@@ -2414,6 +2472,152 @@ const doGenerateStories = useCallback(async (): Promise<void> => {
           </motion.div>
         </div>
       )}
+      {/* ===== Story Edit/Delete Modal ===== */}
+{/* ===== Story View/Edit Modal ===== */}
+{open && selectedStory && (
+  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={closeModal}>
+    <motion.div
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="bg-surface rounded-2xl shadow-xl ring-1 ring-line w-[min(640px,94vw)] p-5"
+      onClick={(e) => e.stopPropagation()}
+    >
+      <div className="flex items-center justify-between mb-3">
+        <h4 className="text-lg font-semibold">تفاصيل User Story</h4>
+        <button onClick={closeModal} className="text-slate-500 hover:text-slate-700" title="إغلاق">✕</button>
+      </div>
+
+      {/* وضع العرض */}
+      {!editMode && (
+        <div className="space-y-3">
+          <div>
+            <div className="text-xs text-slate-500 mb-1">العنوان</div>
+            <div className="font-medium text-slate-800">{selectedStory.title || "-"}</div>
+          </div>
+          <div>
+            <div className="text-xs text-slate-500 mb-1">الوصف</div>
+            <div className="text-slate-700 whitespace-pre-wrap">{selectedStory.description || "-"}</div>
+          </div>
+          <div>
+            <div className="text-xs text-slate-500 mb-1">معايير القبول</div>
+            {Array.isArray(selectedStory.acceptance_criteria) && selectedStory.acceptance_criteria.length ? (
+              <ul className="list-disc ms-5 text-slate-700 space-y-1">
+                {selectedStory.acceptance_criteria.map((ac, i) => <li key={i}>{ac}</li>)}
+              </ul>
+            ) : (
+              <div className="text-slate-400">لا يوجد</div>
+            )}
+          </div>
+
+          <div className="flex items-center justify-between gap-2 mt-4">
+            <button
+              onClick={async () => {
+                if (confirm("هل تريد حذف هذه الستوري نهائيًا؟")) {
+                  await hardDeleteStory();
+                }
+              }}
+              className="px-3 h-10 rounded-lg border text-red-600 border-red-200 hover:bg-red-50"
+              title="حذف نهائي"
+            >
+              حذف
+            </button>
+
+            <div className="ms-auto flex items-center gap-2">
+              <button onClick={() => setEditMode(true)} className="px-4 h-10 rounded-lg border hover:bg-slate-50">
+                تعديل
+              </button>
+              <button onClick={closeModal} className="px-3 h-10 rounded-lg border">
+                إغلاق
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* وضع التعديل */}
+      {editMode && (
+        <div className="space-y-3">
+          <div>
+            <label className="block text-sm mb-1">العنوان</label>
+            <input
+              className="w-full border border-line focus:border-blue-400 focus:ring-2 focus:ring-blue-100 rounded-lg h-10 px-3 text-slate-900"
+              value={formTitle}
+              onChange={(e) => setFormTitle(e.target.value)}
+              placeholder="عنوان الستوري"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm mb-1">الوصف</label>
+            <textarea
+              className="w-full border border-line focus:border-blue-400 focus:ring-2 focus:ring-blue-100 rounded-lg p-2 min-h-[90px] text-slate-900"
+              value={formDesc}
+              onChange={(e) => setFormDesc(e.target.value)}
+              placeholder="وصف مختصر للستوري…"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm mb-1">معايير القبول (كل سطر = معيار)</label>
+            <textarea
+              className="w-full border border-line focus:border-blue-400 focus:ring-2 focus:ring-blue-100 rounded-lg p-2 min-h-[120px] text-slate-900"
+              value={formAC}
+              onChange={(e) => setFormAC(e.target.value)}
+              placeholder={"- يجب أن...\n- عند ... يحدث ..."}
+            />
+          </div>
+
+          <div className="flex items-center justify-between gap-2 mt-4">
+            <button
+              onClick={async () => {
+                if (confirm("هل تريد حذف هذه الستوري نهائيًا؟")) {
+                  await hardDeleteStory();
+                }
+              }}
+              className="px-3 h-10 rounded-lg border text-red-600 border-red-200 hover:bg-red-50"
+              title="حذف نهائي"
+            >
+              حذف
+            </button>
+
+            <div className="ms-auto flex items-center gap-2">
+              <button
+                onClick={() => {
+                  // رجوع بدون حفظ
+                  setEditMode(false);
+                  // رجّع الفورم لقيم الستوري الحالية
+                  setFormTitle(selectedStory?.title ?? "");
+                  setFormDesc(selectedStory?.description ?? "");
+                  setFormAC(
+                    Array.isArray(selectedStory?.acceptance_criteria)
+                      ? selectedStory!.acceptance_criteria!.join("\n")
+                      : selectedStory?.acceptance_criteria ?? ""
+                  );
+                }}
+                className="px-3 h-10 rounded-lg border"
+              >
+                إلغاء
+              </button>
+              <button
+                onClick={saveStory}
+                disabled={saving}
+                className={clsx(
+                  "px-4 h-10 rounded-lg text-white",
+                  savedTick ? "bg-emerald-600" : "bg-blue-600",
+                  !saving && "hover:bg-blue-700",
+                  saving && "opacity-70 cursor-not-allowed"
+                )}
+              >
+                {saving ? "جارٍ الحفظ…" : savedTick ? "تم" : "حفظ"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </motion.div>
+  </div>
+)}
+
 
       {/* Flowchart Modal */}
       {showFlowchart && (
