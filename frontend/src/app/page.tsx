@@ -544,8 +544,8 @@ export default function Home() {
           );
           setMermaidSvg("");
         });
-    } catch (err: any) {
-      setFlowError(err?.message || "فشل في معالجة كود الرسم.");
+    } catch (err: unknown) {
+      setFlowError((err as Error)?.message || "فشل في معالجة كود الرسم.");
       setMermaidSvg("");
     }
   }, [mermaidCode]);
@@ -596,20 +596,19 @@ export default function Home() {
     setOpen(true);
   }
   function openStoryModal(story: Story) {
-  setSelectedStory(story);
-  setFormTitle(story.title ?? "");
-  setFormDesc(story.description ?? "");
-  setFormAC(
-    Array.isArray(story.acceptance_criteria)
-      ? story.acceptance_criteria.join("\n")
-      : (story.acceptance_criteria as unknown as string) ?? ""
-  );
-  const current = storyTags[story.id ?? story.title] ?? "None";
-  setFormTag(current as Tag);
-  setEditMode(false);
-  setOpen(true);
-}
-
+    setSelectedStory(story);
+    setFormTitle(story.title ?? "");
+    setFormDesc(story.description ?? "");
+    setFormAC(
+      Array.isArray(story.acceptance_criteria)
+        ? story.acceptance_criteria.join("\n")
+        : (story.acceptance_criteria as unknown as string) ?? ""
+    );
+    const current = storyTags[story.id ?? story.title] ?? "None";
+    setFormTag(current as Tag);
+    setEditMode(false);
+    setOpen(true);
+  }
 
   function closeModal() {
     setSelectedStory(null);
@@ -878,7 +877,7 @@ export default function Home() {
     };
 
     // 1) فلترة بالنص + التاج
-    let arr = stories.filter((s) => {
+    const arr = stories.filter((s) => {
       const matchesText =
         !q ||
         [s.title, s.description, s.acceptance_criteria]
@@ -1350,7 +1349,7 @@ export default function Home() {
         throw new Error(`HTTP ${res.status} ${msg}`);
       }
 
-      const data = await res.json().catch(() => ({} as any));
+      const data = await res.json().catch(() => ({} as unknown));
       const raw = typeof data?.code === "string" ? data.code : "";
       if (!raw.trim()) {
         setFlowError("الخادم لم يُرجِع كود mermaid صالح.");
@@ -2736,9 +2735,9 @@ export default function Home() {
                     <select
                       className="h-9 ps-8 pe-2 rounded-lg border bg-white text-sm"
                       value={filterTag}
-                      onChange={(e) => {
+                      onChange={(e: React.ChangeEvent<HTMLSelectElement>) => {
                         setPage(1);
-                        setFilterTag(e.target.value as any);
+                        setFilterTag(e.target.value as Tag);
                       }}
                       title="فلتر بالتاج"
                     >
@@ -3143,7 +3142,6 @@ export default function Home() {
                 <div>
                   <label className="block text-sm mb-1">التاج</label>
                   <div className="flex items-center gap-2">
-                    
                     <span
                       className={clsx(
                         "text-[11px] border rounded-full px-2 py-0.5",
@@ -3222,125 +3220,132 @@ export default function Home() {
             )}
 
             {/* وضع التعديل */}
-           {/* وضع التعديل */}
-{editMode && (
-  <div className="space-y-3">
-    {/* العنوان */}
-    <div>
-      <label className="block text-sm mb-1">العنوان</label>
-      <input
-        className="w-full border border-line focus:border-blue-400 focus:ring-2 focus:ring-blue-100 rounded-lg h-10 px-3 text-slate-900"
-        value={formTitle}
-        onChange={(e) => setFormTitle(e.target.value)}
-        placeholder="عنوان الستوري"
-      />
-    </div>
+            {/* وضع التعديل */}
+            {editMode && (
+              <div className="space-y-3">
+                {/* العنوان */}
+                <div>
+                  <label className="block text-sm mb-1">العنوان</label>
+                  <input
+                    className="w-full border border-line focus:border-blue-400 focus:ring-2 focus:ring-blue-100 rounded-lg h-10 px-3 text-slate-900"
+                    value={formTitle}
+                    onChange={(e) => setFormTitle(e.target.value)}
+                    placeholder="عنوان الستوري"
+                  />
+                </div>
 
-    {/* الوصف */}
-    <div>
-      <label className="block text-sm mb-1">الوصف</label>
-      <textarea
-        className="w-full border border-line focus:border-blue-400 focus:ring-2 focus:ring-blue-100 rounded-lg p-2 min-h-[90px] text-slate-900"
-        value={formDesc}
-        onChange={(e) => setFormDesc(e.target.value)}
-        placeholder="وصف مختصر للستوري…"
-      />
-    </div>
+                {/* الوصف */}
+                <div>
+                  <label className="block text-sm mb-1">الوصف</label>
+                  <textarea
+                    className="w-full border border-line focus:border-blue-400 focus:ring-2 focus:ring-blue-100 rounded-lg p-2 min-h-[90px] text-slate-900"
+                    value={formDesc}
+                    onChange={(e) => setFormDesc(e.target.value)}
+                    placeholder="وصف مختصر للستوري…"
+                  />
+                </div>
 
-    {/* معايير القبول */}
-    <div>
-      <label className="block text-sm mb-1">معايير القبول (كل سطر = معيار)</label>
-      <textarea
-        className="w-full border border-line focus:border-blue-400 focus:ring-2 focus:ring-blue-100 rounded-lg p-2 min-h-[120px] text-slate-900"
-        value={formAC}
-        onChange={(e) => setFormAC(e.target.value)}
-        placeholder={"- يجب أن...\n- عند ... يحدث ..."}
-      />
-    </div>
+                {/* معايير القبول */}
+                <div>
+                  <label className="block text-sm mb-1">
+                    معايير القبول (كل سطر = معيار)
+                  </label>
+                  <textarea
+                    className="w-full border border-line focus:border-blue-400 focus:ring-2 focus:ring-blue-100 rounded-lg p-2 min-h-[120px] text-slate-900"
+                    value={formAC}
+                    onChange={(e) => setFormAC(e.target.value)}
+                    placeholder={"- يجب أن...\n- عند ... يحدث ..."}
+                  />
+                </div>
 
-    {/* التـــاج (هنا مكانه الصحيح) */}
-    <div>
-      <label className="block text-sm mb-1">التاج</label>
-      <div className="flex items-center gap-2">
-        <select
-          className="h-9 text-sm rounded border border-line bg-white px-2"
-          value={formTag}
-          onChange={(e) => setFormTag(e.target.value as Tag)}
-          title="Tag"
-        >
-          <option value="None">None</option>
-          <option value="Critical">Critical</option>
-          <option value="Enhancement">Enhancement</option>
-          <option value="Blocked">Blocked</option>
-        </select>
+                {/* التـــاج (هنا مكانه الصحيح) */}
+                <div>
+                  <label className="block text-sm mb-1">التاج</label>
+                  <div className="flex items-center gap-2">
+                    <select
+                      className="h-9 text-sm rounded border border-line bg-white px-2"
+                      value={formTag}
+                      onChange={(e) => setFormTag(e.target.value as Tag)}
+                      title="Tag"
+                    >
+                      <option value="None">None</option>
+                      <option value="Critical">Critical</option>
+                      <option value="Enhancement">Enhancement</option>
+                      <option value="Blocked">Blocked</option>
+                    </select>
 
-        {/* معاينة لون التاج */}
-        <span
-          className={clsx(
-            "text-[11px] border rounded-full px-2 py-0.5",
-            formTag === "Critical"
-              ? "bg-red-50 text-red-700 border-red-200"
-              : formTag === "Enhancement"
-              ? "bg-emerald-50 text-emerald-700 border-emerald-200"
-              : formTag === "Blocked"
-              ? "bg-amber-50 text-amber-800 border-amber-200"
-              : "bg-slate-50 text-slate-700 border-line"
-          )}
-        >
-          {formTag}
-        </span>
-      </div>
-    </div>
+                    {/* معاينة لون التاج */}
+                    <span
+                      className={clsx(
+                        "text-[11px] border rounded-full px-2 py-0.5",
+                        formTag === "Critical"
+                          ? "bg-red-50 text-red-700 border-red-200"
+                          : formTag === "Enhancement"
+                          ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                          : formTag === "Blocked"
+                          ? "bg-amber-50 text-amber-800 border-amber-200"
+                          : "bg-slate-50 text-slate-700 border-line"
+                      )}
+                    >
+                      {formTag}
+                    </span>
+                  </div>
+                </div>
 
-    {/* أزرار */}
-    <div className="flex items-center justify-between gap-2 mt-4">
-      <button
-        onClick={async () => {
-          if (confirm("هل تريد حذف هذه الستوري نهائيًا؟")) {
-            await hardDeleteStory();
-          }
-        }}
-        className="px-3 h-10 rounded-lg border text-red-600 border-red-200 hover:bg-red-50"
-        title="حذف نهائي"
-      >
-        حذف
-      </button>
+                {/* أزرار */}
+                <div className="flex items-center justify-between gap-2 mt-4">
+                  <button
+                    onClick={async () => {
+                      if (confirm("هل تريد حذف هذه الستوري نهائيًا؟")) {
+                        await hardDeleteStory();
+                      }
+                    }}
+                    className="px-3 h-10 rounded-lg border text-red-600 border-red-200 hover:bg-red-50"
+                    title="حذف نهائي"
+                  >
+                    حذف
+                  </button>
 
-      <div className="ms-auto flex items-center gap-2">
-        <button
-          onClick={() => {
-            setEditMode(false);
-            // رجع الفورم لقيم الستوري الأصلية
-            setFormTitle(selectedStory?.title ?? "");
-            setFormDesc(selectedStory?.description ?? "");
-            setFormAC(
-              Array.isArray(selectedStory?.acceptance_criteria)
-                ? selectedStory!.acceptance_criteria!.join("\n")
-                : (selectedStory?.acceptance_criteria as unknown as string) ?? ""
-            );
-            setFormTag((storyTags[selectedStory?.id ?? selectedStory?.title!] ?? "None") as Tag);
-          }}
-          className="px-3 h-10 rounded-lg border"
-        >
-          إلغاء
-        </button>
-        <button
-          onClick={saveStory}
-          disabled={saving}
-          className={clsx(
-            "px-4 h-10 rounded-lg text-white",
-            savedTick ? "bg-emerald-600" : "bg-blue-600",
-            !saving && "hover:bg-blue-700",
-            saving && "opacity-70 cursor-not-allowed"
-          )}
-        >
-          {saving ? "جارٍ الحفظ…" : savedTick ? "تم" : "حفظ"}
-        </button>
-      </div>
-    </div>
-  </div>
-)}
+                  <div className="ms-auto flex items-center gap-2">
+                    <button
+                      onClick={() => {
+                        setEditMode(false);
+                        // رجع الفورم لقيم الستوري الأصلية
+                        setFormTitle(selectedStory?.title ?? "");
+                        setFormDesc(selectedStory?.description ?? "");
+                        setFormAC(
+                          Array.isArray(selectedStory?.acceptance_criteria)
+                            ? selectedStory!.acceptance_criteria!.join("\n")
+                            : (selectedStory?.acceptance_criteria as unknown as string) ??
+                                ""
+                        );
+                        if (!selectedStory) return;
 
+                        setFormTag(
+                          (storyTags[selectedStory.id ?? selectedStory.title] ??
+                            "None") as Tag
+                        );
+                      }}
+                      className="px-3 h-10 rounded-lg border"
+                    >
+                      إلغاء
+                    </button>
+                    <button
+                      onClick={saveStory}
+                      disabled={saving}
+                      className={clsx(
+                        "px-4 h-10 rounded-lg text-white",
+                        savedTick ? "bg-emerald-600" : "bg-blue-600",
+                        !saving && "hover:bg-blue-700",
+                        saving && "opacity-70 cursor-not-allowed"
+                      )}
+                    >
+                      {saving ? "جارٍ الحفظ…" : savedTick ? "تم" : "حفظ"}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
           </motion.div>
         </div>
       )}
