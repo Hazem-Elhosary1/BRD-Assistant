@@ -25,12 +25,21 @@ function extractMermaidCode(input?: string | null): string | null {
 function cleanMermaidCode(input?: string | null): string {
   if (!input) return "";
   let code = String(input);
+
+  // ✅ لو فيه block ```mermaid ... ```
   const block = code.match(/```mermaid\s*([\s\S]*?)```/i);
-  if (block) code = block[1];
+  if (block) {
+    code = block[1]; // خُد المحتوى بس
+  }
+
+  // ✅ إزالة أي ``` زيادة أو وسوم HTML
   code = code.replace(/```(?:mermaid)?/gi, "").replace(/```/g, "");
   code = code.replace(/<\/?[^>]+>/g, "");
+
+  // ✅ تطبيع newlines
   code = code.replace(/\r\n/g, "\n").trim();
 
+  // ✅ قصّ من أول كلمه graph/flowchart... الخ
   const indices = [
     code.search(/\bgraph\s+(?:TD|TB|LR|RL|BT)?\b/i),
     code.search(/\bflowchart\s+(?:TD|TB|LR|RL|BT)?\b/i),
@@ -42,7 +51,10 @@ function cleanMermaidCode(input?: string | null): string {
     code.search(/\bpie\s+title\b/i),
   ].filter((i) => i >= 0);
 
-  if (indices.length) code = code.slice(Math.min(...indices));
+  if (indices.length) {
+    code = code.slice(Math.min(...indices));
+  }
+
   return code.trim();
 }
 
@@ -76,7 +88,8 @@ import {
   Trash2,
   Edit3,
   RefreshCw,
-  Search, X ,
+  Search,
+  X,
   Download,
   Lightbulb,
   Moon,
@@ -85,8 +98,7 @@ import {
   Sun,
   Monitor,
   ArrowUp,
- Clock3,
-
+  Clock3,
 } from "lucide-react";
 // -------------------- Imports --------------------
 import clsx from "clsx";
@@ -261,17 +273,19 @@ function debounce<A extends unknown[]>(fn: (...args: A) => void, ms = 400) {
 // ---------------- Root Component ----------------
 export default function Home() {
   const [titleEditing, setTitleEditing] = useState(false);
-const [titleDraft, setTitleDraft] = useState("");
+  const [titleDraft, setTitleDraft] = useState("");
 
-const saveThreadTitle = () => {
-  if (!activeThreadId) return;
-  const v = titleDraft.trim();
-  if (!v) return setTitleEditing(false);
-  setThreads(prev =>
-    prev.map(t => (t.id === activeThreadId ? { ...t, title: v, updatedAt: Date.now() } : t))
-  );
-  setTitleEditing(false);
-};
+  const saveThreadTitle = () => {
+    if (!activeThreadId) return;
+    const v = titleDraft.trim();
+    if (!v) return setTitleEditing(false);
+    setThreads((prev) =>
+      prev.map((t) =>
+        t.id === activeThreadId ? { ...t, title: v, updatedAt: Date.now() } : t
+      )
+    );
+    setTitleEditing(false);
+  };
 
   const idRef = useRef(1);
   const chatRef = useRef<HTMLDivElement>(null);
@@ -283,7 +297,9 @@ const saveThreadTitle = () => {
     content: "أهلًا! ارفع الـBRD أو ابعتلي نص، وأنا هساعدك.",
     timestamp: Date.now(),
   };
-const [modalTag, setModalTag] = useState<Tag>("None");
+  const [modalTag, setModalTag] = useState<Tag>("None");
+  // أعلى الكومبوننت مع باقي الstates
+  const [formTag, setFormTag] = useState<Tag>("None"); // ⬅️ جديد
 
   const [threads, setThreads] = useState<Thread[]>([]);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
@@ -294,8 +310,8 @@ const [modalTag, setModalTag] = useState<Tag>("None");
     [threads, activeThreadId]
   );
   useEffect(() => {
-  setTitleDraft(activeThread?.title ?? "");
-}, [activeThreadId, activeThread?.title]);
+    setTitleDraft(activeThread?.title ?? "");
+  }, [activeThreadId, activeThread?.title]);
   // رسالة ترحيب لكل ثريد جديد
   const makeGreeting = useCallback(
     (): ChatMessage => ({
@@ -426,7 +442,9 @@ const [modalTag, setModalTag] = useState<Tag>("None");
   const [copiedId, setCopiedId] = useState<number | null>(null);
   const [showFlowchart, setShowFlowchart] = useState(false);
   const [mermaidCode, setMermaidCode] = useState("");
+  const [mermaidSvg, setMermaidSvg] = useState("");
   const [flowLoading, setFlowLoading] = useState(false);
+  const [flowError, setFlowError] = useState<string | null>(null);
   const [showExportMenu, setShowExportMenu] = useState(false);
   const [brdId, setBrdId] = useState<number | null>(null);
   const [selectedStory, setSelectedStory] = useState<Story | null>(null);
@@ -464,8 +482,8 @@ const [modalTag, setModalTag] = useState<Tag>("None");
 
   type Tag = "None" | "Critical" | "Enhancement" | "Blocked";
   const [storyTags, setStoryTags] = useState<Record<string | number, Tag>>({});
-const [filterTag, setFilterTag] = useState<Tag | "All">("All");
-const [sortMode, setSortMode] = useState<SortMode>("recent");
+  const [filterTag, setFilterTag] = useState<Tag | "All">("All");
+  const [sortMode, setSortMode] = useState<SortMode>("recent");
   const resetComposerHeight = () => {
     const ta = composerRef.current;
     if (!ta) return;
@@ -493,6 +511,44 @@ const [sortMode, setSortMode] = useState<SortMode>("recent");
     const interval = setInterval(checkServer, 15000); // كل 15 ثانية
     return () => clearInterval(interval);
   }, []);
+  useEffect(() => {
+    if (!mermaidCode) return;
+
+    try {
+      const cleaned = cleanMermaidCode(mermaidCode);
+      if (!cleaned) {
+        setFlowError("الكود بعد التنظيف أصبح فارغًا.");
+        setMermaidSvg("");
+        return;
+      }
+
+      // تهيئة mermaid (مرّة في كل تغيير – بسيط ومضمون)
+      mermaid.initialize({
+        startOnLoad: false,
+        theme: "default",
+        securityLevel: "loose", // مهم أحيانًا
+      });
+
+      const renderId = `mmd-${Date.now()}-${Math.random()
+        .toString(36)
+        .slice(2)}`;
+      mermaid
+        .render(renderId, cleaned)
+        .then(({ svg }) => {
+          setMermaidSvg(svg);
+          setFlowError(null);
+        })
+        .catch((err) => {
+          setFlowError(
+            typeof err?.message === "string" ? err.message : "فشل رندر الرسم."
+          );
+          setMermaidSvg("");
+        });
+    } catch (err: any) {
+      setFlowError(err?.message || "فشل في معالجة كود الرسم.");
+      setMermaidSvg("");
+    }
+  }, [mermaidCode]);
 
   // فحص اتصال OpenAI عبر مسار /openai/health وإرسال الـ API Key من الإعدادات
   useEffect(() => {
@@ -539,6 +595,22 @@ const [sortMode, setSortMode] = useState<SortMode>("recent");
     setEditMode(false); // ← يبدأ كعرض فقط
     setOpen(true);
   }
+  function openStoryModal(story: Story) {
+  setSelectedStory(story);
+  setFormTitle(story.title ?? "");
+  setFormDesc(story.description ?? "");
+  setFormAC(
+    Array.isArray(story.acceptance_criteria)
+      ? story.acceptance_criteria.join("\n")
+      : (story.acceptance_criteria as unknown as string) ?? ""
+  );
+  const current = storyTags[story.id ?? story.title] ?? "None";
+  setFormTag(current as Tag);
+  setEditMode(false);
+  setOpen(true);
+}
+
+
   function closeModal() {
     setSelectedStory(null);
     setOpen(false);
@@ -552,6 +624,7 @@ const [sortMode, setSortMode] = useState<SortMode>("recent");
       return;
     }
     setFormTitle(selectedStory.title ?? "");
+
     setFormDesc(selectedStory.description ?? "");
     setFormAC(
       Array.isArray(selectedStory.acceptance_criteria)
@@ -561,48 +634,41 @@ const [sortMode, setSortMode] = useState<SortMode>("recent");
   }, [selectedStory]);
 
   async function saveStory() {
-    if (!selectedStory?.id) return;
-    const nacArr = formAC
-      .split(/\r?\n/)
-      .map((t) => t.trim())
-      .filter(Boolean);
-
+    if (!selectedStory) return;
+    setSaving(true);
     try {
-      setSaving(true);
+      const payload = {
+        title: formTitle.trim(),
+        description: formDesc.trim(),
+        acceptance_criteria: formAC
+          .split(/\r?\n/)
+          .map((t) => t.trim())
+          .filter(Boolean),
+        // لو الباك إند بيدعم التاج فعّله
+        // tag: formTag,
+      };
+
       const res = await fetch(`${getApiBase()}/stories/${selectedStory.id}`, {
         method: "PUT",
         headers: getHeaders({ "Content-Type": "application/json" }),
-        body: JSON.stringify({
-          title: formTitle,
-          description: formDesc,
-          acceptance_criteria: nacArr,
-        }),
+        body: JSON.stringify(payload),
       });
-      if (!res.ok) {
-        const msg = await res.text().catch(() => "");
-        throw new Error(`Update failed: ${res.status} ${msg}`);
-      }
+      if (!res.ok) throw new Error(`Update failed: ${res.status}`);
 
-      // تحديث محلي سريع
-      setStories((list) =>
-        list.map((x) =>
-          x.id === selectedStory.id
-            ? {
-                ...x,
-                title: formTitle,
-                description: formDesc,
-                acceptance_criteria: nacArr,
-              }
-            : x
-        )
-      );
+      // حدِّث اللستة (يا إمّا re-fetch يا إمّا local)
+      await refreshStories?.();
+      // أو بديلًا:
+      // setStories(list => list.map(x => x.id===selectedStory.id ? {...x, ...payload} : x));
 
-      await refreshStories?.(); // توحيد مع السيرفر
-      toast.success("تم حفظ التعديل");
-      setEditMode(false); // ← ارجع لوضع العرض
-      setSavedTick(true); // ← إظهار "تم" لحظيًا
-      setTimeout(() => setSavedTick(false), 1200);
-    } catch {
+      // ✅ حدِّث التاج المحلي بعد نجاح الحفظ
+      const key = selectedStory.id ?? selectedStory.title;
+      setTag(key, formTag);
+
+      setEditMode(false);
+      toast.success("تم حفظ التعديل بنجاح");
+      // لو تحب تقفل المودال بعد الحفظ:
+      // setOpen(false);
+    } catch (e) {
       toast.error("فشل حفظ التعديل");
     } finally {
       setSaving(false);
@@ -730,7 +796,6 @@ const [sortMode, setSortMode] = useState<SortMode>("recent");
   const [appendText, setAppendText] = useState("");
   const [apiKey, setApiKey] = useState<string>("");
   const [apiBaseInput, setApiBaseInput] = useState<string>("");
-  const [mermaidSvg, setMermaidSvg] = useState("");
   // Quick command bubbles
   const helpCmds = [
     {
@@ -799,45 +864,62 @@ const [sortMode, setSortMode] = useState<SortMode>("recent");
       setApiBaseInput(getApiBase());
     }
   }, []);
+  // ===== Backlog toolbar state =====
+  type SortBy = "latest" | "oldest" | "title-asc" | "title-desc" | "tag";
+  const [sortBy, setSortBy] = useState<SortBy>("latest");
 
-const filteredStories = useMemo(() => {
-  const q = backlogQuery.trim().toLowerCase();
+  const filteredStories = useMemo(() => {
+    const q = backlogQuery.trim().toLowerCase();
 
-  // 1) فلترة بالتاج (لو اختير Tag معيّن)
-  let out = stories.filter(s => {
-    if (filterTag !== "All") {
-      const tag = storyTags[s.id ?? s.title] ?? "None";
-      if (tag !== filterTag) return false;
-    }
-    if (!q) return true;
+    const norm = (v: unknown): string => {
+      if (Array.isArray(v)) return v.map(norm).join(" ");
+      if (v == null) return "";
+      return String(v);
+    };
 
-    // 2) بحث نصّي
-    const norm = (v: unknown): string =>
-      Array.isArray(v) ? v.map(norm).join(" ") : v == null ? "" : String(v);
-    return [s.title, s.description, s.acceptance_criteria]
-      .filter(Boolean)
-      .some(t => norm(t).toLowerCase().includes(q));
-  });
+    // 1) فلترة بالنص + التاج
+    let arr = stories.filter((s) => {
+      const matchesText =
+        !q ||
+        [s.title, s.description, s.acceptance_criteria]
+          .filter((x) => x != null)
+          .some((t) => norm(t).toLowerCase().includes(q));
 
-  // 3) فرز
-  out = [...out].sort((a, b) => {
-    const byTitle = (x: Story) => (x.title || "").toLowerCase();
-    const hasAC = (x: Story) =>
-      Array.isArray(x.acceptance_criteria) && x.acceptance_criteria.length ? 1 : 0;
+      const matchesTag =
+        filterTag === "All" ||
+        (storyTags[s.id ?? s.title] ?? "None") === filterTag;
 
-    switch (sortMode) {
-      case "az": return byTitle(a).localeCompare(byTitle(b), "ar");
-      case "za": return byTitle(b).localeCompare(byTitle(a), "ar");
-      case "oldest": return 1;            // يحافظ على الترتيب ثم نقلب تحت بالـpage لو حبيت
-      case "with-ac": return hasAC(b) - hasAC(a) || byTitle(a).localeCompare(byTitle(b), "ar");
-      case "recent":
-      default: return 0;                  // أبقِ الترتيب كما هو (أحدث أعلى عندك)
-    }
-  });
+      return matchesText && matchesTag;
+    });
 
-  return out;
-}, [stories, backlogQuery, filterTag, sortMode, storyTags]);
+    // 2) ترتيب
+    const tagRank: Record<Tag, number> = {
+      Critical: 0,
+      Enhancement: 1,
+      Blocked: 2,
+      None: 3,
+    };
 
+    arr.sort((a, b) => {
+      if (sortBy === "title-asc")
+        return (a.title || "").localeCompare(b.title || "");
+      if (sortBy === "title-desc")
+        return (b.title || "").localeCompare(a.title || "");
+      if (sortBy === "tag") {
+        const ta = (storyTags[a.id ?? a.title] ?? "None") as Tag;
+        const tb = (storyTags[b.id ?? b.title] ?? "None") as Tag;
+        const r = tagRank[ta] - tagRank[tb];
+        if (r !== 0) return r;
+        return (a.title || "").localeCompare(b.title || "");
+      }
+      // latest / oldest: استخدم id كبديل للوقت (لو عندك createdAt استعمله بدلًا منه)
+      const ida = Number(a.id) || 0;
+      const idb = Number(b.id) || 0;
+      return sortBy === "latest" ? idb - ida : ida - idb;
+    });
+
+    return arr;
+  }, [stories, backlogQuery, filterTag, sortBy, storyTags]);
 
   const [page, setPage] = useState(1);
   const pageSize = 10;
@@ -1100,34 +1182,37 @@ const filteredStories = useMemo(() => {
     }
     if (fileRef.current) fileRef.current.value = "";
   }
-// === Thread auto-naming (from BRD filename) ===
-const basename = (n: string) => n.replace(/\.[^./\\]+$/i, "").trim();
+  // === Thread auto-naming (from BRD filename) ===
+  const basename = (n: string) => n.replace(/\.[^./\\]+$/i, "").trim();
 
-const isDefaultThreadTitle = (t?: string) => {
-  const s = (t || "").trim();
-  return (
-    s === "" ||
-    /^محادثة/.test(s) ||           // "محادثة جديدة/قديمة/..."
-    /^Untitled/i.test(s) ||
-    /^New chat/i.test(s)
+  const isDefaultThreadTitle = (t?: string) => {
+    const s = (t || "").trim();
+    return (
+      s === "" ||
+      /^محادثة/.test(s) || // "محادثة جديدة/قديمة/..."
+      /^Untitled/i.test(s) ||
+      /^New chat/i.test(s)
+    );
+  };
+
+  const renameActiveThreadIfDefault = useCallback(
+    (newTitle: string) => {
+      if (!activeThreadId) return;
+      const title = basename(newTitle);
+      if (!title) return;
+
+      setThreads((prev) =>
+        prev.map((t) =>
+          t.id === activeThreadId
+            ? isDefaultThreadTitle(t.title)
+              ? { ...t, title, updatedAt: Date.now() }
+              : t
+            : t
+        )
+      );
+    },
+    [activeThreadId, setThreads]
   );
-};
-
-const renameActiveThreadIfDefault = useCallback((newTitle: string) => {
-  if (!activeThreadId) return;
-  const title = basename(newTitle);
-  if (!title) return;
-
-  setThreads(prev =>
-    prev.map(t =>
-      t.id === activeThreadId
-        ? (isDefaultThreadTitle(t.title)
-            ? { ...t, title, updatedAt: Date.now() }
-            : t)
-        : t
-    )
-  );
-}, [activeThreadId, setThreads]);
 
   async function doUpload(file: File) {
     const task: UploadTask = {
@@ -1155,56 +1240,64 @@ const renameActiveThreadIfDefault = useCallback((newTitle: string) => {
         }
       };
 
-  xhr.onload = () => {
-  try {
-    const data = JSON.parse(xhr.responseText || "{}");
-    const suggested = data.title || data.filename || data.fileName || file.name;
-renameActiveThreadIfDefault(suggested);
+      xhr.onload = () => {
+        try {
+          const data = JSON.parse(xhr.responseText || "{}");
+          const suggested =
+            data.title || data.filename || data.fileName || file.name;
+          renameActiveThreadIfDefault(suggested);
 
-    if (xhr.status >= 200 && xhr.status < 300) {
-      setUploads((prev) =>
-        prev.map((t) =>
-          t.name === file.name ? { ...t, status: "done", progress: 100 } : t
-        )
-      );
+          if (xhr.status >= 200 && xhr.status < 300) {
+            setUploads((prev) =>
+              prev.map((t) =>
+                t.name === file.name
+                  ? { ...t, status: "done", progress: 100 }
+                  : t
+              )
+            );
 
-      if (data.brdId) {
-        setBrdId(Number(data.brdId));
-      } else {
-        console.warn("No brdId in /upload response");
-      }
+            if (data.brdId) {
+              setBrdId(Number(data.brdId));
+            } else {
+              console.warn("No brdId in /upload response");
+            }
 
-      // ✅ سمّي الثريد باسم الملف/العنوان الراجع من السيرفر لو العنوان لسه افتراضي
-      const suggested =
-        data.title || data.filename || data.fileName || data.name || file.name;
-      renameActiveThreadIfDefault(suggested);
+            // ✅ سمّي الثريد باسم الملف/العنوان الراجع من السيرفر لو العنوان لسه افتراضي
+            const suggested =
+              data.title ||
+              data.filename ||
+              data.fileName ||
+              data.name ||
+              file.name;
+            renameActiveThreadIfDefault(suggested);
 
-      updateActiveThreadMessages((p) => [
-        ...p,
-        {
-          id: idRef.current++,
-          role: "assistant",
-          content: `تم رفع BRD (${file.name}).`,
-        },
-      ]);
-      toast.success(`تم رفع ${file.name}`);
-      void refreshAll();
-    } else {
-      setUploads((prev) =>
-        prev.map((t) =>
-          t.name === file.name ? { ...t, status: "error" } : t
-        )
-      );
-      toast.error(`فشل رفع ${file.name} (HTTP ${xhr.status})`);
-    }
-  } catch (e) {
-    setUploads((prev) =>
-      prev.map((t) => (t.name === file.name ? { ...t, status: "error" } : t))
-    );
-    toast.error(`فشل قراءة رد الرفع`);
-  }
-};
-
+            updateActiveThreadMessages((p) => [
+              ...p,
+              {
+                id: idRef.current++,
+                role: "assistant",
+                content: `تم رفع BRD (${file.name}).`,
+              },
+            ]);
+            toast.success(`تم رفع ${file.name}`);
+            void refreshAll();
+          } else {
+            setUploads((prev) =>
+              prev.map((t) =>
+                t.name === file.name ? { ...t, status: "error" } : t
+              )
+            );
+            toast.error(`فشل رفع ${file.name} (HTTP ${xhr.status})`);
+          }
+        } catch (e) {
+          setUploads((prev) =>
+            prev.map((t) =>
+              t.name === file.name ? { ...t, status: "error" } : t
+            )
+          );
+          toast.error(`فشل قراءة رد الرفع`);
+        }
+      };
 
       xhr.onerror = () => {
         setUploads((prev) =>
@@ -1239,24 +1332,41 @@ renameActiveThreadIfDefault(suggested);
 
   const handleAIGenerate = async () => {
     setFlowLoading(true);
+    setFlowError(null);
     setMermaidSvg("");
+
     try {
       const res = await fetch(getApiBase() + "/generate-flowchart", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "x-api-key": apiKey, // أضف هذا السطر
+          "x-api-key": apiKey,
         },
         body: JSON.stringify({ stories }),
       });
-      const data = await res.json();
-      setMermaidCode(data.code || "");
+
+      if (!res.ok) {
+        const msg = await res.text().catch(() => "");
+        throw new Error(`HTTP ${res.status} ${msg}`);
+      }
+
+      const data = await res.json().catch(() => ({} as any));
+      const raw = typeof data?.code === "string" ? data.code : "";
+      if (!raw.trim()) {
+        setFlowError("الخادم لم يُرجِع كود mermaid صالح.");
+        toast.error("فشل توليد الرسم: لا يوجد code");
+        return;
+      }
+
+      setMermaidCode(raw); // ← هننضّفه ونرندر في useEffect
     } catch (e) {
-      toast.error("تعذر توليد الرسم بالذكاء الاصطناعي");
+      setFlowError((e as Error)?.message || "تعذر توليد الرسم.");
+      toast.error("تعذر توليد الرسم");
     } finally {
       setFlowLoading(false);
     }
   };
+
   const doSummarize = useCallback(async (): Promise<void> => {
     setOpLoading(true);
     setError(null);
@@ -1958,142 +2068,180 @@ renameActiveThreadIfDefault(suggested);
         )}
       </AnimatePresence>
 
+      {/* Left sidebar: Threads + Insights */}
+      <aside className="col-span-3 text-foreground">
+        <div className="space-y-4">
+          {/* Threads card */}
+          <section className="bg-surface rounded-xl shadow p-3 border border-line">
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="font-semibold text-slate-700">Threads</h3>
+              <button
+                onClick={createThread}
+                className="text-xs px-2 h-7 rounded border bg-white hover:bg-slate-50"
+                title="ثريد جديد"
+              >
+                جديد
+              </button>
+            </div>
 
-{/* Left sidebar: Threads + Insights */}
-<aside className="col-span-3 text-foreground">
-  <div className="space-y-4">
-    {/* Threads card */}
-    <section className="bg-surface rounded-xl shadow p-3 border border-line">
-      <div className="flex items-center justify-between mb-2">
-        <h3 className="font-semibold text-slate-700">Threads</h3>
-        <button
-          onClick={createThread}
-          className="text-xs px-2 h-7 rounded border bg-white hover:bg-slate-50"
-          title="ثريد جديد"
-        >
-          جديد
-        </button>
-      </div>
+            <ul className="space-y-1 max-h-[32vh] overflow-y-auto pe-1">
+              {threads.map((t) => {
+                const isActive = t.id === activeThreadId;
+                return (
+                  <li
+                    key={t.id}
+                    onClick={() => setActiveThreadId(t.id)}
+                    title={t.title}
+                    className={clsx(
+                      "group grid grid-cols-[1fr_auto] items-center gap-2 px-2 py-2 rounded border cursor-pointer",
+                      isActive
+                        ? "bg-blue-50 border-blue-200 text-blue-700"
+                        : "bg-white hover:bg-slate-50 border-line text-slate-700"
+                    )}
+                  >
+                    <div className="min-w-0">
+                      <div className="truncate text-sm">
+                        {t.title || "محادثة"}
+                      </div>
+                      <div className="text-[11px] text-slate-500">
+                        {t.messages.length} رسالة •{" "}
+                        {new Date(t.updatedAt).toLocaleTimeString("ar", {
+                          hour: "2-digit",
+                          minute: "2-digit",
+                          hour12: true,
+                        })}
+                      </div>
+                    </div>
 
-      <ul className="space-y-1 max-h-[32vh] overflow-y-auto pe-1">
-        {threads.map(t => {
-          const isActive = t.id === activeThreadId;
-          return (
-            <li
-              key={t.id}
-              onClick={() => setActiveThreadId(t.id)}
-              title={t.title}
-              className={clsx(
-                "group grid grid-cols-[1fr_auto] items-center gap-2 px-2 py-2 rounded border cursor-pointer",
-                isActive
-                  ? "bg-blue-50 border-blue-200 text-blue-700"
-                  : "bg-white hover:bg-slate-50 border-line text-slate-700"
+                    <div className="shrink-0 flex items-center gap-1 opacity-70 group-hover:opacity-100">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          renameThread(t.id);
+                        }}
+                        className="p-1 rounded border hover:bg-slate-50"
+                        title="إعادة تسمية"
+                      >
+                        <Edit3 className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (confirm("حذف هذه المحادثة؟")) deleteThread(t.id);
+                        }}
+                        className="p-1 rounded border border-red-200 text-red-600 hover:bg-red-50"
+                        title="حذف"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </li>
+                );
+              })}
+              {threads.length === 0 && (
+                <li className="text-slate-400 text-sm">لا توجد محادثات بعد.</li>
               )}
-            >
-              <div className="min-w-0">
-                <div className="truncate text-sm">{t.title || "محادثة"}</div>
-                <div className="text-[11px] text-slate-500">
-                  {t.messages.length} رسالة • {new Date(t.updatedAt).toLocaleTimeString("ar", { hour: "2-digit", minute: "2-digit", hour12: true })}
-                </div>
-              </div>
+            </ul>
+          </section>
 
-              <div className="shrink-0 flex items-center gap-1 opacity-70 group-hover:opacity-100">
-                <button
-                  onClick={(e) => { e.stopPropagation(); renameThread(t.id); }}
-                  className="p-1 rounded border hover:bg-slate-50"
-                  title="إعادة تسمية"
+          {/* Insights card */}
+          <section className="bg-surface rounded-xl shadow p-4 border border-line">
+            <div className="flex items-center justify-between">
+              <h3 className="font-semibold text-slate-700">Insights</h3>
+              <button
+                onClick={() => {
+                  void refreshInsights();
+                  toast.info("تم تحديث Insights");
+                }}
+                className="text-xs text-blue-600 hover:underline"
+              >
+                تحديث
+              </button>
+            </div>
+            <ul className="text-sm space-y-3 mt-3 pe-1 max-h-[38vh] overflow-y-auto">
+              {insights.gaps.map((g, i) => (
+                <li
+                  key={`g${i}`}
+                  className="flex items-start gap-2 text-amber-700"
                 >
-                  <Edit3 className="w-3.5 h-3.5" />
-                </button>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    if (confirm("حذف هذه المحادثة؟")) deleteThread(t.id);
-                  }}
-                  className="p-1 rounded border border-red-200 text-red-600 hover:bg-red-50"
-                  title="حذف"
+                  ⚠️ <span>{g}</span>
+                </li>
+              ))}
+              {insights.risks.map((r, i) => (
+                <li
+                  key={`r${i}`}
+                  className="flex items-start gap-2 text-red-600"
                 >
-                  <Trash2 className="w-3.5 h-3.5" />
-                </button>
-              </div>
-            </li>
-          );
-        })}
-        {threads.length === 0 && (
-          <li className="text-slate-400 text-sm">لا توجد محادثات بعد.</li>
-        )}
-      </ul>
-    </section>
-
-    {/* Insights card */}
-    <section className="bg-surface rounded-xl shadow p-4 border border-line">
-      <div className="flex items-center justify-between">
-        <h3 className="font-semibold text-slate-700">Insights</h3>
-        <button
-          onClick={() => { void refreshInsights(); toast.info("تم تحديث Insights"); }}
-          className="text-xs text-blue-600 hover:underline"
-        >
-          تحديث
-        </button>
-      </div>
-      <ul className="text-sm space-y-3 mt-3 pe-1 max-h-[38vh] overflow-y-auto">
-        {insights.gaps.map((g, i) => (
-          <li key={`g${i}`} className="flex items-start gap-2 text-amber-700">⚠️ <span>{g}</span></li>
-        ))}
-        {insights.risks.map((r, i) => (
-          <li key={`r${i}`} className="flex items-start gap-2 text-red-600">⚠️ <span>{r}</span></li>
-        ))}
-        {insights.metrics.map((m, i) => (
-          <li key={`m${i}`} className="flex items-start gap-2 text-blue-700">📊 <span>{m}</span></li>
-        ))}
-        {!insights.gaps.length && !insights.risks.length && !insights.metrics.length && (
-          <li className="text-slate-400 text-sm">لا توجد إنسايتس بعد.</li>
-        )}
-      </ul>
-    </section>
-  </div>
-</aside>
-
+                  ⚠️ <span>{r}</span>
+                </li>
+              ))}
+              {insights.metrics.map((m, i) => (
+                <li
+                  key={`m${i}`}
+                  className="flex items-start gap-2 text-blue-700"
+                >
+                  📊 <span>{m}</span>
+                </li>
+              ))}
+              {!insights.gaps.length &&
+                !insights.risks.length &&
+                !insights.metrics.length && (
+                  <li className="text-slate-400 text-sm">
+                    لا توجد إنسايتس بعد.
+                  </li>
+                )}
+            </ul>
+          </section>
+        </div>
+      </aside>
 
       {/* ===== Chat column ===== */}
       <main className="col-span-6 bg-surface rounded-xl shadow flex flex-col relative text-foreground">
         <header className="sticky top-0 z-10 bg-surface/80 backdrop-blur border-b border-line px-4 py-3 flex items-center gap-2">
-  {titleEditing ? (
-    <>
-      <input
-        className="flex-1 h-9 px-3 rounded-lg border border-line focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
-        value={titleDraft}
-        onChange={(e) => setTitleDraft(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") saveThreadTitle();
-          if (e.key === "Escape") setTitleEditing(false);
-        }}
-        autoFocus
-        placeholder="اسم الثريد"
-      />
-      <button onClick={saveThreadTitle} className="px-3 h-9 rounded-lg bg-blue-600 text-white hover:bg-blue-700">
-        حفظ
-      </button>
-      <button onClick={() => setTitleEditing(false)} className="px-3 h-9 rounded-lg border">إلغاء</button>
-    </>
-  ) : (
-    <>
-      <h1 className="flex-1 font-semibold text-slate-800 text-lg truncate">
-        {activeThread?.title || "محادثة غير مسماة"}
-      </h1>
-      <div className="text-xs text-slate-500 me-2">
-        {(activeThread?.messages?.length ?? 0)} رسالة
-      </div>
-      <button
-        onClick={() => setTitleEditing(true)}
-        className="p-2 rounded-lg border hover:bg-slate-50"
-        title="إعادة تسمية الثريد"
-      >
-        <Edit3 className="w-4 h-4" />
-      </button>
-    </>
-  )}
-</header>
+          {titleEditing ? (
+            <>
+              <input
+                className="flex-1 h-9 px-3 rounded-lg border border-line focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+                value={titleDraft}
+                onChange={(e) => setTitleDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") saveThreadTitle();
+                  if (e.key === "Escape") setTitleEditing(false);
+                }}
+                autoFocus
+                placeholder="اسم الثريد"
+              />
+              <button
+                onClick={saveThreadTitle}
+                className="px-3 h-9 rounded-lg bg-blue-600 text-white hover:bg-blue-700"
+              >
+                حفظ
+              </button>
+              <button
+                onClick={() => setTitleEditing(false)}
+                className="px-3 h-9 rounded-lg border"
+              >
+                إلغاء
+              </button>
+            </>
+          ) : (
+            <>
+              <h1 className="flex-1 font-semibold text-slate-800 text-lg truncate">
+                {activeThread?.title || "محادثة غير مسماة"}
+              </h1>
+              <div className="text-xs text-slate-500 me-2">
+                {activeThread?.messages?.length ?? 0} رسالة
+              </div>
+              <button
+                onClick={() => setTitleEditing(true)}
+                className="p-2 rounded-lg border hover:bg-slate-50"
+                title="إعادة تسمية الثريد"
+              >
+                <Edit3 className="w-4 h-4" />
+              </button>
+            </>
+          )}
+        </header>
 
         {/* Messages */}
         <div
@@ -2243,7 +2391,7 @@ renameActiveThreadIfDefault(suggested);
         {showHelp && (
           <div className="px-3 pb-2 flex flex-wrap gap-2 items-center">
             <span className="text-xs text-slate-500">اختصار سريع:</span>
-            
+
             <button
               onClick={() => setShowHelp(false)}
               className="ms-auto text-xs px-2 h-8 rounded border text-slate-500 hover:bg-slate-50"
@@ -2512,155 +2660,200 @@ renameActiveThreadIfDefault(suggested);
           </div>
         </div>
 
-{/* Status (pretty) */}
-<div className="grid grid-cols-3 gap-2 text-xs">
-  <div className={clsx(
-    "flex items-center gap-2 p-2 rounded-xl border",
-    status.hasBrd ? "bg-emerald-50 border-emerald-200 text-emerald-800" : "bg-slate-50 border-line text-slate-700"
-  )}>
-    <FileText className="w-4 h-4" />
-    <div className="leading-tight">
-      <div className="text-[11px] opacity-80">BRD</div>
-      <div className="font-semibold">{status.hasBrd ? "موجود" : "غير موجود"}</div>
-    </div>
-  </div>
+        {/* Status (pretty) */}
+        <div className="grid grid-cols-3 gap-2 text-xs">
+          <div
+            className={clsx(
+              "flex items-center gap-2 p-2 rounded-xl border",
+              status.hasBrd
+                ? "bg-emerald-50 border-emerald-200 text-emerald-800"
+                : "bg-slate-50 border-line text-slate-700"
+            )}
+          >
+            <FileText className="w-4 h-4" />
+            <div className="leading-tight">
+              <div className="text-[11px] opacity-80">BRD</div>
+              <div className="font-semibold">
+                {status.hasBrd ? "موجود" : "غير موجود"}
+              </div>
+            </div>
+          </div>
 
-  <div className="flex items-center gap-2 p-2 rounded-xl border bg-sky-50 border-sky-200 text-sky-800">
-    <ListChecks className="w-4 h-4" />
-    <div className="leading-tight">
-      <div className="text-[11px] opacity-80">Stories</div>
-      <div className="font-semibold">{status.storyCount}</div>
-    </div>
-  </div>
+          <div className="flex items-center gap-2 p-2 rounded-xl border bg-sky-50 border-sky-200 text-sky-800">
+            <ListChecks className="w-4 h-4" />
+            <div className="leading-tight">
+              <div className="text-[11px] opacity-80">Stories</div>
+              <div className="font-semibold">{status.storyCount}</div>
+            </div>
+          </div>
 
-  <div className="flex items-center gap-2 p-2 rounded-xl border bg-violet-50 border-violet-200 text-violet-800"
-       title={status.lastUploadedAt ? new Date(status.lastUploadedAt).toLocaleString() : "لا يوجد"}>
-    <Clock3 className="w-4 h-4" />
-    <div className="leading-tight">
-      <div className="text-[11px] opacity-80">آخر رفع</div>
-      <div className="font-semibold">
-        {status.lastUploadedAt ? new Date(status.lastUploadedAt).toLocaleTimeString("ar", { hour: "2-digit", minute: "2-digit", hour12: true }) : "—"}
-      </div>
-    </div>
-  </div>
-</div>
-
+          <div
+            className="flex items-center gap-2 p-2 rounded-xl border bg-violet-50 border-violet-200 text-violet-800"
+            title={
+              status.lastUploadedAt
+                ? new Date(status.lastUploadedAt).toLocaleString()
+                : "لا يوجد"
+            }
+          >
+            <Clock3 className="w-4 h-4" />
+            <div className="leading-tight">
+              <div className="text-[11px] opacity-80">آخر رفع</div>
+              <div className="font-semibold">
+                {status.lastUploadedAt
+                  ? new Date(status.lastUploadedAt).toLocaleTimeString("ar", {
+                      hour: "2-digit",
+                      minute: "2-digit",
+                      hour12: true,
+                    })
+                  : "—"}
+              </div>
+            </div>
+          </div>
+        </div>
 
         {/* Backlog */}
         <div className="h-px bg-slate-200" />
         <div>
-<div className="space-y-2">
-  <div className="flex items-center gap-2">
-    <h3 className="font-semibold text-slate-700">Backlog</h3>
+          <div className="space-y-2">
+            <div className="flex items-center gap-2">
+              <div className="ms-auto flex items-center gap-2">
+                {/* تحديث */}
+                <div className="flex items-center gap-2 mb-2 flex-wrap">
+                  <button
+                    onClick={() => {
+                      void refreshStories();
+                      toast.message("تم تحديث الـStories");
+                    }}
+                    className="h-9 px-3 rounded-lg border bg-white hover:bg-slate-50 text-slate-700 flex items-center gap-2"
+                    title="تحديث"
+                  >
+                    <RefreshCw className="h-4 w-4" />
+                    تحديث
+                  </button>
 
-    {/* عدّاد سريع */}
-    <span className="text-[11px] px-2 py-0.5 rounded-full border bg-slate-50 text-slate-700 border-line">
-      {filteredStories.length}/{stories.length}
-    </span>
+                  {/* فلتر التاج */}
+                  <div className="relative">
+                    <select
+                      className="h-9 ps-8 pe-2 rounded-lg border bg-white text-sm"
+                      value={filterTag}
+                      onChange={(e) => {
+                        setPage(1);
+                        setFilterTag(e.target.value as any);
+                      }}
+                      title="فلتر بالتاج"
+                    >
+                      <option value="All">كل التاجات</option>
+                      <option value="Critical">Critical</option>
+                      <option value="Enhancement">Enhancement</option>
+                      <option value="Blocked">Blocked</option>
+                      <option value="None">None</option>
+                    </select>
+                    <span className="absolute left-2 top-1/2 -translate-y-1/2 text-xs opacity-60">
+                      🏷️
+                    </span>
+                  </div>
 
-    <div className="ms-auto flex items-center gap-2">
-      {/* بحث */}
-      <div className="relative w-[220px]">
-        <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
-        <input
-          value={backlogQuery}
-          onChange={(e) => { setPage(1); setBacklogQuery(e.target.value); }}
-          placeholder="بحث في الـStories..."
-          className="h-8 w-full pl-8 pr-7 rounded border border-line focus:border-blue-400 focus:ring-2 focus:ring-blue-100 text-sm"
-        />
-        {backlogQuery && (
-          <button
-            onClick={() => { setBacklogQuery(""); setPage(1); }}
-            className="absolute right-1 top-1/2 -translate-y-1/2 p-1 rounded hover:bg-slate-100"
-            title="مسح البحث"
-          >
-            <X className="w-4 h-4 text-slate-500" />
-          </button>
-        )}
-      </div>
+                  {/* الترتيب */}
+                  <div className="relative">
+                    <select
+                      className="h-9 ps-8 pe-2 rounded-lg border bg-white text-sm"
+                      value={sortBy}
+                      onChange={(e) => {
+                        setPage(1);
+                        setSortBy(e.target.value as SortBy);
+                      }}
+                      title="ترتيب"
+                    >
+                      <option value="latest">الأحدث أولًا</option>
+                      <option value="oldest">الأقدم أولًا</option>
+                      <option value="title-asc">عنوان A → Z</option>
+                      <option value="title-desc">عنوان Z → A</option>
+                      <option value="tag">حسب التاج (Critical أولًا)</option>
+                    </select>
+                    <span className="absolute left-2 top-1/2 -translate-y-1/2 text-xs opacity-60">
+                      ⇅
+                    </span>
+                  </div>
 
-      {/* فلتر بالتاج */}
-      <select
-        className="h-8 text-sm rounded border border-line bg-white px-2"
-        value={filterTag}
-        onChange={(e) => { setPage(1); setFilterTag(e.target.value as Tag | "All"); }}
-        title="فلتر بالتاج"
-      >
-        <option value="All">كل التاجز</option>
-        <option value="Critical">Critical</option>
-        <option value="Enhancement">Enhancement</option>
-        <option value="Blocked">Blocked</option>
-        <option value="None">None</option>
-      </select>
+                  {/* بحث */}
+                  <div className="ms-auto flex items-center gap-2">
+                    <div className="relative">
+                      <input
+                        value={backlogQuery}
+                        onChange={(e) => {
+                          setPage(1);
+                          setBacklogQuery(e.target.value);
+                        }}
+                        placeholder="بحث في الـStories..."
+                        className="h-9 w-[220px] max-w-[40vw] ps-8 pe-2 rounded-lg border border-line focus:border-blue-400 focus:ring-2 focus:ring-blue-100 text-sm"
+                      />
+                      <span className="absolute left-2 top-1/2 -translate-y-1/2 text-slate-400">
+                        🔎
+                      </span>
+                    </div>
 
-      {/* فرز */}
-      <select
-        className="h-8 text-sm rounded border border-line bg-white px-2"
-        value={sortMode}
-        onChange={(e) => setSortMode(e.target.value as SortMode)}
-        title="ترتيب"
-      >
-        <option value="recent">الأحدث أولاً</option>
-        <option value="oldest">الأقدم أولاً</option>
-        <option value="az">العنوان A→Z</option>
-        <option value="za">العنوان Z→A</option>
-        <option value="with-ac">التي بها AC أولاً</option>
-      </select>
-
-      {/* تحديث */}
-      <button
-        onClick={() => { void refreshStories(); toast.message("تم تحديث الـStories"); }}
-        className="h-8 px-2 rounded border bg-white hover:bg-slate-50 text-slate-700 flex items-center gap-1"
-        title="تحديث"
-      >
-        <RefreshCw className="w-4 h-4" />
-        <span className="text-xs">تحديث</span>
-      </button>
-    </div>
-  </div>
-</div>
-
+                    {/* العدّاد */}
+                    <span className="text-[12px] px-2 py-1 rounded-full border bg-white text-slate-600">
+                      {filteredStories.length}/{stories.length}
+                    </span>
+                    <h3 className="font-semibold text-slate-700 ms-1">
+                      Backlog
+                    </h3>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
 
           <ul className="text-sm space-y-2 max-h-56 overflow-auto pe-1">
             {pagedStories.length ? (
               pagedStories.map((s) => (
-<li
-  key={s.id ?? s.title}
-  className="group p-3 border rounded-xl bg-white hover:shadow-sm hover:bg-slate-50 cursor-pointer transition"
-  onClick={() => openModal(s)}
-  title="اضغط للتفاصيل"
->
-  <div className="flex items-start justify-between gap-3">
-    <div className="min-w-0">
-      <div className="font-medium text-slate-800 truncate">{s.title}</div>
-      {s.description && (
-        <p className="text-slate-500 text-xs mt-1 line-clamp-2">{s.description}</p>
-      )}
-      <div className="flex items-center gap-2 mt-2">
-        <span className="text-[11px] px-2 py-0.5 rounded-full border bg-slate-50 text-slate-700">
-          AC: {Array.isArray(s.acceptance_criteria) ? s.acceptance_criteria.length : 0}
-        </span>
-        <span
-          className={clsx(
-            "text-[11px] px-2 py-0.5 rounded-full border",
-            tagColor(storyTags[s.id ?? s.title] ?? "None")
-          )}
-          onClick={(e) => e.stopPropagation()}
-        >
-          {storyTags[s.id ?? s.title] ?? "None"}
-        </span>
-      </div>
-    </div>
+                <li
+                  key={s.id ?? s.title}
+                  className="group p-3 border rounded-xl bg-white hover:shadow-sm hover:bg-slate-50 cursor-pointer transition"
+                  onClick={() => openModal(s)}
+                  title="اضغط للتفاصيل"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="font-medium text-slate-800 truncate">
+                        {s.title}
+                      </div>
+                      {s.description && (
+                        <p className="text-slate-500 text-xs mt-1 line-clamp-2">
+                          {s.description}
+                        </p>
+                      )}
+                      <div className="flex items-center gap-2 mt-2">
+                        <span className="text-[11px] px-2 py-0.5 rounded-full border bg-slate-50 text-slate-700">
+                          AC:{" "}
+                          {Array.isArray(s.acceptance_criteria)
+                            ? s.acceptance_criteria.length
+                            : 0}
+                        </span>
+                        <span
+                          className={clsx(
+                            "text-[11px] px-2 py-0.5 rounded-full border",
+                            tagColor(storyTags[s.id ?? s.title] ?? "None")
+                          )}
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          {storyTags[s.id ?? s.title] ?? "None"}
+                        </span>
+                      </div>
+                    </div>
 
-    <button
-      className="opacity-0 group-hover:opacity-100 text-xs px-2 h-7 rounded border"
-      onClick={(e) => { e.stopPropagation(); openModal(s); }}
-    >
-      تفاصيل
-    </button>
-  </div>
-</li>
-
+                    <button
+                      className="opacity-0 group-hover:opacity-100 text-xs px-2 h-7 rounded border"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        openModal(s);
+                      }}
+                    >
+                      تفاصيل
+                    </button>
+                  </div>
+                </li>
               ))
             ) : (
               <li className="text-slate-400">لا توجد Stories بعد.</li>
@@ -2948,6 +3141,26 @@ renameActiveThreadIfDefault(suggested);
             {!editMode && (
               <div className="space-y-3">
                 <div>
+                  <label className="block text-sm mb-1">التاج</label>
+                  <div className="flex items-center gap-2">
+                    
+                    <span
+                      className={clsx(
+                        "text-[11px] border rounded-full px-2 py-0.5",
+                        formTag === "Critical"
+                          ? "bg-red-50 text-red-700 border-red-200"
+                          : formTag === "Enhancement"
+                          ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                          : formTag === "Blocked"
+                          ? "bg-amber-50 text-amber-800 border-amber-200"
+                          : "bg-slate-50 text-slate-700 border-line"
+                      )}
+                    >
+                      {formTag}
+                    </span>
+                  </div>
+                </div>
+                <div>
                   <div className="text-xs text-slate-500 mb-1">العنوان</div>
                   <div className="font-medium text-slate-800">
                     {selectedStory.title || "-"}
@@ -2963,6 +3176,8 @@ renameActiveThreadIfDefault(suggested);
                   <div className="text-xs text-slate-500 mb-1">
                     معايير القبول
                   </div>
+                  {/* سطر اختيار التاج داخل المودال */}
+
                   {Array.isArray(selectedStory.acceptance_criteria) &&
                   selectedStory.acceptance_criteria.length ? (
                     <ul className="list-disc ms-5 text-slate-700 space-y-1">
@@ -3007,87 +3222,125 @@ renameActiveThreadIfDefault(suggested);
             )}
 
             {/* وضع التعديل */}
-            {editMode && (
-              <div className="space-y-3">
-                <div>
-                  <label className="block text-sm mb-1">العنوان</label>
-                  <input
-                    className="w-full border border-line focus:border-blue-400 focus:ring-2 focus:ring-blue-100 rounded-lg h-10 px-3 text-slate-900"
-                    value={formTitle}
-                    onChange={(e) => setFormTitle(e.target.value)}
-                    placeholder="عنوان الستوري"
-                  />
-                </div>
+           {/* وضع التعديل */}
+{editMode && (
+  <div className="space-y-3">
+    {/* العنوان */}
+    <div>
+      <label className="block text-sm mb-1">العنوان</label>
+      <input
+        className="w-full border border-line focus:border-blue-400 focus:ring-2 focus:ring-blue-100 rounded-lg h-10 px-3 text-slate-900"
+        value={formTitle}
+        onChange={(e) => setFormTitle(e.target.value)}
+        placeholder="عنوان الستوري"
+      />
+    </div>
 
-                <div>
-                  <label className="block text-sm mb-1">الوصف</label>
-                  <textarea
-                    className="w-full border border-line focus:border-blue-400 focus:ring-2 focus:ring-blue-100 rounded-lg p-2 min-h-[90px] text-slate-900"
-                    value={formDesc}
-                    onChange={(e) => setFormDesc(e.target.value)}
-                    placeholder="وصف مختصر للستوري…"
-                  />
-                </div>
+    {/* الوصف */}
+    <div>
+      <label className="block text-sm mb-1">الوصف</label>
+      <textarea
+        className="w-full border border-line focus:border-blue-400 focus:ring-2 focus:ring-blue-100 rounded-lg p-2 min-h-[90px] text-slate-900"
+        value={formDesc}
+        onChange={(e) => setFormDesc(e.target.value)}
+        placeholder="وصف مختصر للستوري…"
+      />
+    </div>
 
-                <div>
-                  <label className="block text-sm mb-1">
-                    معايير القبول (كل سطر = معيار)
-                  </label>
-                  <textarea
-                    className="w-full border border-line focus:border-blue-400 focus:ring-2 focus:ring-blue-100 rounded-lg p-2 min-h-[120px] text-slate-900"
-                    value={formAC}
-                    onChange={(e) => setFormAC(e.target.value)}
-                    placeholder={"- يجب أن...\n- عند ... يحدث ..."}
-                  />
-                </div>
+    {/* معايير القبول */}
+    <div>
+      <label className="block text-sm mb-1">معايير القبول (كل سطر = معيار)</label>
+      <textarea
+        className="w-full border border-line focus:border-blue-400 focus:ring-2 focus:ring-blue-100 rounded-lg p-2 min-h-[120px] text-slate-900"
+        value={formAC}
+        onChange={(e) => setFormAC(e.target.value)}
+        placeholder={"- يجب أن...\n- عند ... يحدث ..."}
+      />
+    </div>
 
-                <div className="flex items-center justify-between gap-2 mt-4">
-                  <button
-                    onClick={async () => {
-                      if (confirm("هل تريد حذف هذه الستوري نهائيًا؟")) {
-                        await hardDeleteStory();
-                      }
-                    }}
-                    className="px-3 h-10 rounded-lg border text-red-600 border-red-200 hover:bg-red-50"
-                    title="حذف نهائي"
-                  >
-                    حذف
-                  </button>
+    {/* التـــاج (هنا مكانه الصحيح) */}
+    <div>
+      <label className="block text-sm mb-1">التاج</label>
+      <div className="flex items-center gap-2">
+        <select
+          className="h-9 text-sm rounded border border-line bg-white px-2"
+          value={formTag}
+          onChange={(e) => setFormTag(e.target.value as Tag)}
+          title="Tag"
+        >
+          <option value="None">None</option>
+          <option value="Critical">Critical</option>
+          <option value="Enhancement">Enhancement</option>
+          <option value="Blocked">Blocked</option>
+        </select>
 
-                  <div className="ms-auto flex items-center gap-2">
-                    <button
-                      onClick={() => {
-                        // رجوع بدون حفظ
-                        setEditMode(false);
-                        // رجّع الفورم لقيم الستوري الحالية
-                        setFormTitle(selectedStory?.title ?? "");
-                        setFormDesc(selectedStory?.description ?? "");
-                        setFormAC(
-                          Array.isArray(selectedStory?.acceptance_criteria)
-                            ? selectedStory!.acceptance_criteria!.join("\n")
-                            : selectedStory?.acceptance_criteria ?? ""
-                        );
-                      }}
-                      className="px-3 h-10 rounded-lg border"
-                    >
-                      إلغاء
-                    </button>
-                    <button
-                      onClick={saveStory}
-                      disabled={saving}
-                      className={clsx(
-                        "px-4 h-10 rounded-lg text-white",
-                        savedTick ? "bg-emerald-600" : "bg-blue-600",
-                        !saving && "hover:bg-blue-700",
-                        saving && "opacity-70 cursor-not-allowed"
-                      )}
-                    >
-                      {saving ? "جارٍ الحفظ…" : savedTick ? "تم" : "حفظ"}
-                    </button>
-                  </div>
-                </div>
-              </div>
-            )}
+        {/* معاينة لون التاج */}
+        <span
+          className={clsx(
+            "text-[11px] border rounded-full px-2 py-0.5",
+            formTag === "Critical"
+              ? "bg-red-50 text-red-700 border-red-200"
+              : formTag === "Enhancement"
+              ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+              : formTag === "Blocked"
+              ? "bg-amber-50 text-amber-800 border-amber-200"
+              : "bg-slate-50 text-slate-700 border-line"
+          )}
+        >
+          {formTag}
+        </span>
+      </div>
+    </div>
+
+    {/* أزرار */}
+    <div className="flex items-center justify-between gap-2 mt-4">
+      <button
+        onClick={async () => {
+          if (confirm("هل تريد حذف هذه الستوري نهائيًا؟")) {
+            await hardDeleteStory();
+          }
+        }}
+        className="px-3 h-10 rounded-lg border text-red-600 border-red-200 hover:bg-red-50"
+        title="حذف نهائي"
+      >
+        حذف
+      </button>
+
+      <div className="ms-auto flex items-center gap-2">
+        <button
+          onClick={() => {
+            setEditMode(false);
+            // رجع الفورم لقيم الستوري الأصلية
+            setFormTitle(selectedStory?.title ?? "");
+            setFormDesc(selectedStory?.description ?? "");
+            setFormAC(
+              Array.isArray(selectedStory?.acceptance_criteria)
+                ? selectedStory!.acceptance_criteria!.join("\n")
+                : (selectedStory?.acceptance_criteria as unknown as string) ?? ""
+            );
+            setFormTag((storyTags[selectedStory?.id ?? selectedStory?.title!] ?? "None") as Tag);
+          }}
+          className="px-3 h-10 rounded-lg border"
+        >
+          إلغاء
+        </button>
+        <button
+          onClick={saveStory}
+          disabled={saving}
+          className={clsx(
+            "px-4 h-10 rounded-lg text-white",
+            savedTick ? "bg-emerald-600" : "bg-blue-600",
+            !saving && "hover:bg-blue-700",
+            saving && "opacity-70 cursor-not-allowed"
+          )}
+        >
+          {saving ? "جارٍ الحفظ…" : savedTick ? "تم" : "حفظ"}
+        </button>
+      </div>
+    </div>
+  </div>
+)}
+
           </motion.div>
         </div>
       )}
@@ -3149,22 +3402,32 @@ renameActiveThreadIfDefault(suggested);
                   جاري توليد الرسم...
                 </span>
               </div>
+            ) : flowError ? (
+              <div className="min-h-[120px] rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+                ⚠️ {flowError}
+                <div className="mt-2 text-xs text-red-600/80">
+                  تحقّق من Network tab وتأكد أن الـ API يرجّع{" "}
+                  {"{ code: string }"} بدون HTML.
+                </div>
+              </div>
+            ) : mermaidSvg ? (
+              <div
+                id="ai-flowchart"
+                style={{
+                  minHeight: 300,
+                  maxHeight: zoomed ? "90vh" : 500,
+                  overflow: "auto",
+                  background: "#fff",
+                  borderRadius: 12,
+                  border: "1px solid #e2e8f0",
+                  padding: 16,
+                }}
+                dangerouslySetInnerHTML={{ __html: mermaidSvg }}
+              />
             ) : (
-              mermaidSvg && (
-                <div
-                  id="ai-flowchart"
-                  style={{
-                    minHeight: 300,
-                    maxHeight: zoomed ? "90vh" : 500,
-                    overflow: "auto",
-                    background: "#fff",
-                    borderRadius: 12,
-                    border: "1px solid #e2e8f0",
-                    padding: 16,
-                  }}
-                  dangerouslySetInnerHTML={{ __html: mermaidSvg }}
-                />
-              )
+              <div className="min-h-[120px] text-slate-500 text-sm">
+                لا يوجد رسم بعد. اضغط “رسم بالذكاء الاصطناعي”.
+              </div>
             )}
           </motion.div>
         </div>
