@@ -26,34 +26,50 @@ function cleanMermaidCode(input?: string | null): string {
   if (!input) return "";
   let code = String(input);
 
-  // ✅ لو فيه block ```mermaid ... ```
+  // 1) اقتطع محتوى ```mermaid
   const block = code.match(/```mermaid\s*([\s\S]*?)```/i);
-  if (block) {
-    code = block[1]; // خُد المحتوى بس
-  }
+  if (block) code = block[1];
 
-  // ✅ إزالة أي ``` زيادة أو وسوم HTML
-  code = code.replace(/```(?:mermaid)?/gi, "").replace(/```/g, "");
-  code = code.replace(/<\/?[^>]+>/g, "");
+  // 2) إزالة الفينس/HTML
+  code = code
+    .replace(/```(?:mermaid)?/gi, "")
+    .replace(/```/g, "")
+    .replace(/<\/?[^>]+>/g, "");
 
-  // ✅ تطبيع newlines
-  code = code.replace(/\r\n/g, "\n").trim();
+  // 3) تطبيع newlines وعلامات الاتجاه الخفية
+  code = code
+    .replace(/\r\n/g, "\n")
+    .replace(/[\u200E\u200F\u202A-\u202E]/g, "")
+    .trim();
 
-  // ✅ قصّ من أول كلمه graph/flowchart... الخ
-  const indices = [
-    code.search(/\bgraph\s+(?:TD|TB|LR|RL|BT)?\b/i),
-    code.search(/\bflowchart\s+(?:TD|TB|LR|RL|BT)?\b/i),
-    code.search(/\bsequenceDiagram\b/i),
-    code.search(/\bgantt\b/i),
-    code.search(/\bclassDiagram\b/i),
-    code.search(/\bstateDiagram(?:-v2)?\b/i),
-    code.search(/\berDiagram\b/i),
-    code.search(/\bpie\s+title\b/i),
-  ].filter((i) => i >= 0);
+  // 4) قص من أول كلمة mermaid معروفة
+  const firstKw = code.search(
+    /\b(graph|flowchart|sequenceDiagram|gantt|classDiagram|stateDiagram(?:-v2)?|erDiagram|pie)\b/i
+  );
+  if (firstKw > 0) code = code.slice(firstKw);
 
-  if (indices.length) {
-    code = code.slice(Math.min(...indices));
-  }
+  // 5) حوّل الـ en/em-dash إلى hyphen **بدون** تغيير عدد الشرط
+  code = code.replace(/[–—]/g, "-"); // فقط استبدال الحرف نفسه
+
+  // 6) id(label...) -> id["label..."]
+  const lines = code.split("\n").map((line) => {
+    let l = line.replace(/[“”]/g, '"').replace(/[‘’]/g, "'");
+    l = l.replace(
+      /([A-Za-z\u0600-\u06FF_][\w\u0600-\u06FF-]*?)\s*\(([^()]*)\)(?=(?:\s*(?:-->|---|===|-\.-|-\->|--o|--x|\)|\s|$)))/g,
+      (_m, id, label) => {
+        const safe = String(label)
+          .replace(/\\?"/g, '\\"') // اهرب "
+          .replace(/\]/g, "\\]") // اهرب ] لو ظهرت داخل اللابل
+          .trim();
+        return `${id}["${safe}"]`;
+      }
+    );
+    return l;
+  });
+  code = lines.join("\n");
+
+  // 7) لو مفيش header زوّد واحد
+  if (!/^(graph|flowchart)\s+/i.test(code)) code = `graph LR\n${code}`;
 
   return code.trim();
 }
@@ -90,6 +106,7 @@ import {
   RefreshCw,
   Search,
   X,
+  AlertTriangle, Activity ,
   Download,
   Lightbulb,
   Moon,
@@ -514,6 +531,8 @@ export default function Home() {
   useEffect(() => {
     if (!mermaidCode) return;
 
+    let aborted = false; // لو اتغيرت الحالة قبل ما نكمّل
+
     try {
       const cleaned = cleanMermaidCode(mermaidCode);
       if (!cleaned) {
@@ -522,32 +541,50 @@ export default function Home() {
         return;
       }
 
-      // تهيئة mermaid (مرّة في كل تغيير – بسيط ومضمون)
       mermaid.initialize({
         startOnLoad: false,
         theme: "default",
-        securityLevel: "loose", // مهم أحيانًا
+        securityLevel: "loose",
       });
+
+      // جرّب parse قبل render — مع محاولة إنقاذ
+
+      let finalCode = cleaned;
+      try {
+        mermaid.parse?.(finalCode);
+      } catch (e) {
+        const retry = cleaned.replace(/^[\s\S]*?\b(graph|flowchart)\b/i, "$1");
+        mermaid.parse?.(retry); // لو فشلت هترمي نفس الاستثناء
+        finalCode = retry; // ✅ استخدم النسخة المصحّحة
+      }
 
       const renderId = `mmd-${Date.now()}-${Math.random()
         .toString(36)
         .slice(2)}`;
       mermaid
-        .render(renderId, cleaned)
+        .render(renderId, finalCode) // ✅ رندر بالـ finalCode
         .then(({ svg }) => {
+          if (aborted) return;
           setMermaidSvg(svg);
           setFlowError(null);
         })
         .catch((err) => {
+          if (aborted) return;
           setFlowError(
             typeof err?.message === "string" ? err.message : "فشل رندر الرسم."
           );
           setMermaidSvg("");
         });
     } catch (err: unknown) {
-      setFlowError((err as Error)?.message || "فشل في معالجة كود الرسم.");
-      setMermaidSvg("");
+      if (!aborted) {
+        setFlowError((err as Error)?.message || "فشل في معالجة كود الرسم.");
+        setMermaidSvg("");
+      }
     }
+
+    return () => {
+      aborted = true;
+    };
   }, [mermaidCode]);
 
   // فحص اتصال OpenAI عبر مسار /openai/health وإرسال الـ API Key من الإعدادات
@@ -2144,53 +2181,83 @@ export default function Home() {
           </section>
 
           {/* Insights card */}
+          
           <section className="bg-surface rounded-xl shadow p-4 border border-line">
-            <div className="flex items-center justify-between">
-              <h3 className="font-semibold text-slate-700">Insights</h3>
-              <button
-                onClick={() => {
-                  void refreshInsights();
-                  toast.info("تم تحديث Insights");
-                }}
-                className="text-xs text-blue-600 hover:underline"
-              >
-                تحديث
-              </button>
-            </div>
-            <ul className="text-sm space-y-3 mt-3 pe-1 max-h-[38vh] overflow-y-auto">
-              {insights.gaps.map((g, i) => (
-                <li
-                  key={`g${i}`}
-                  className="flex items-start gap-2 text-amber-700"
-                >
-                  ⚠️ <span>{g}</span>
-                </li>
-              ))}
-              {insights.risks.map((r, i) => (
-                <li
-                  key={`r${i}`}
-                  className="flex items-start gap-2 text-red-600"
-                >
-                  ⚠️ <span>{r}</span>
-                </li>
-              ))}
-              {insights.metrics.map((m, i) => (
-                <li
-                  key={`m${i}`}
-                  className="flex items-start gap-2 text-blue-700"
-                >
-                  📊 <span>{m}</span>
-                </li>
-              ))}
-              {!insights.gaps.length &&
-                !insights.risks.length &&
-                !insights.metrics.length && (
-                  <li className="text-slate-400 text-sm">
-                    لا توجد إنسايتس بعد.
-                  </li>
-                )}
-            </ul>
-          </section>
+  {/* Header */}
+  <div className="flex items-center justify-between">
+    <h3 className="font-semibold text-slate-700">Insights</h3>
+    <button
+      onClick={() => {
+        void refreshInsights();
+        toast.info("تم تحديث Insights");
+      }}
+      className="text-xs text-blue-600 hover:underline"
+    >
+      تحديث
+    </button>
+  </div>
+
+  {/* Sections */}
+  <div className="mt-3 space-y-3">
+    {/* helper: row */}
+    {([
+      {
+        key: "gaps",
+        title: "Gaps",
+        color: "text-amber-600",
+        bullet: "•",
+        items: insights.gaps as string[],
+      },
+      {
+        key: "risks",
+        title: "Risks",
+        color: "text-red-600",
+        bullet: "⚠️",
+        items: insights.risks as string[],
+      },
+      {
+        key: "metrics",
+        title: "Metrics",
+        color: "text-sky-700",
+        bullet: "📊",
+        items: insights.metrics as string[],
+      },
+    ] as const).map((sec) => (
+      <details key={sec.key} className="rounded-lg border border-line overflow-hidden group">
+        <summary className="cursor-pointer list-none px-3 py-2 bg-muted/50 hover:bg-muted flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <span className={sec.color}>{sec.title}</span>
+            <span className="text-xs rounded-full px-2 py-0.5 border bg-white/70">
+              {sec.items?.length ?? 0}
+            </span>
+          </div>
+          <span className="text-slate-500 text-xs group-open:rotate-180 transition-transform">⌄</span>
+        </summary>
+
+        {sec.items?.length ? (
+          <ul className="text-sm space-y-2 pe-2 py-2 max-h-[26vh] overflow-y-auto">
+            {sec.items.map((t, i) => (
+              <li key={i} className={`flex items-start gap-2 leading-6 ${sec.color}`}>
+                <span className="mt-0.5">{sec.bullet}</span>
+                <span className="text-slate-800">{t}</span>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <div className="px-3 py-3 text-sm text-slate-400">لا يوجد عناصر.</div>
+        )}
+      </details>
+    ))}
+
+    {/* Empty state الكل فاضي */}
+    {!insights.gaps.length && !insights.risks.length && !insights.metrics.length && (
+      <div className="text-slate-400 text-sm px-2 py-4 text-center">
+        لا توجد إنسايتس بعد.
+      </div>
+    )}
+  </div>
+</section>
+
         </div>
       </aside>
 
@@ -3116,92 +3183,216 @@ export default function Home() {
       {/* ===== Story View/Edit Modal ===== */}
       {open && selectedStory && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
-          onClick={closeModal}
+          className="fixed inset-0 z-50 flex items-center justify-center"
+          aria-hidden={false}
         >
+          {/* Backdrop */}
+          <div
+            className="absolute inset-0 bg-black/40 backdrop-blur-[2px]"
+            onClick={closeModal}
+          />
+
+          {/* Dialog */}
           <motion.div
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="bg-surface rounded-2xl shadow-xl ring-1 ring-line w-[min(640px,94vw)] p-5"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="story-modal-title"
+            aria-describedby="story-modal-desc"
+            initial={{ opacity: 0, scale: 0.98 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.98 }}
+            transition={{ duration: 0.18 }}
+            className="relative bg-surface rounded-2xl shadow-xl ring-1 ring-line w-[min(700px,94vw)] max-h-[90vh] grid grid-rows-[auto_minmax(0,1fr)_auto]"
             onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") {
+                e.stopPropagation();
+                closeModal();
+              }
+              // حفظ سريع في وضع التعديل
+              if (
+                editMode &&
+                (e.ctrlKey || e.metaKey) &&
+                (e.key.toLowerCase() === "s" || e.key === "Enter")
+              ) {
+                e.preventDefault();
+                if (!saving) saveStory();
+              }
+            }}
+            tabIndex={-1}
           >
-            <div className="flex items-center justify-between mb-3">
-              <h4 className="text-lg font-semibold">تفاصيل User Story</h4>
+            {/* Header */}
+            <div className="flex items-center justify-between gap-3 px-5 py-3 rounded-t-2xl border-b bg-surface/85 backdrop-blur">
+              <div className="flex items-center gap-3">
+                <h4 id="story-modal-title" className="text-lg font-semibold">
+                  تفاصيل User Story
+                </h4>
+                <span
+                  className={clsx(
+                    "text-[11px] border rounded-full px-2 py-0.5",
+                    formTag === "Critical"
+                      ? "bg-red-50 text-red-700 border-red-200"
+                      : formTag === "Enhancement"
+                      ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                      : formTag === "Blocked"
+                      ? "bg-amber-50 text-amber-800 border-amber-200"
+                      : "bg-slate-50 text-slate-700 border-line"
+                  )}
+                >
+                  {formTag}
+                </span>
+              </div>
               <button
                 onClick={closeModal}
-                className="text-slate-500 hover:text-slate-700"
-                title="إغلاق"
+                className="inline-flex h-9 w-9 items-center justify-center rounded-lg border hover:bg-muted text-slate-500"
+                aria-label="إغلاق"
+                autoFocus
               >
                 ✕
               </button>
             </div>
 
-            {/* وضع العرض */}
-            {!editMode && (
-              <div className="space-y-3">
-                <div>
-                  <label className="block text-sm mb-1">التاج</label>
-                  <div className="flex items-center gap-2">
-                    <span
-                      className={clsx(
-                        "text-[11px] border rounded-full px-2 py-0.5",
-                        formTag === "Critical"
-                          ? "bg-red-50 text-red-700 border-red-200"
-                          : formTag === "Enhancement"
-                          ? "bg-emerald-50 text-emerald-700 border-emerald-200"
-                          : formTag === "Blocked"
-                          ? "bg-amber-50 text-amber-800 border-amber-200"
-                          : "bg-slate-50 text-slate-700 border-line"
+            {/* Body (scroll area) */}
+            <div id="story-modal-desc" className="px-6 py-4 overflow-y-auto">
+              {/* عرض */}
+              {!editMode && (
+                <div className="space-y-5 max-w-prose">
+                  <section>
+                    <div className="text-xs text-slate-500 mb-1">العنوان</div>
+                    <div className="font-medium text-slate-900 leading-7">
+                      {selectedStory.title || "-"}
+                    </div>
+                  </section>
+
+                  <section>
+                    <div className="text-xs text-slate-500 mb-1">الوصف</div>
+                    <div className="text-slate-800 leading-7 whitespace-pre-wrap">
+                      {selectedStory.description || "-"}
+                    </div>
+                  </section>
+
+                  <section>
+                    <div className="flex items-center justify-between">
+                      <div className="text-xs text-slate-500 mb-1">
+                        معايير القبول
+                      </div>
+                      {!!selectedStory.acceptance_criteria?.length && (
+                        <button
+                          onClick={async () => {
+                            const text = selectedStory
+                              .acceptance_criteria!.map(
+                                (x, i) => `${i + 1}. ${x}`
+                              )
+                              .join("\n");
+                            await navigator.clipboard.writeText(text);
+                          }}
+                          className="text-xs underline text-slate-500 hover:text-slate-700"
+                        >
+                          نسخ
+                        </button>
                       )}
-                    >
-                      {formTag}
-                    </span>
-                  </div>
-                </div>
-                <div>
-                  <div className="text-xs text-slate-500 mb-1">العنوان</div>
-                  <div className="font-medium text-slate-800">
-                    {selectedStory.title || "-"}
-                  </div>
-                </div>
-                <div>
-                  <div className="text-xs text-slate-500 mb-1">الوصف</div>
-                  <div className="text-slate-700 whitespace-pre-wrap">
-                    {selectedStory.description || "-"}
-                  </div>
-                </div>
-                <div>
-                  <div className="text-xs text-slate-500 mb-1">
-                    معايير القبول
-                  </div>
-                  {/* سطر اختيار التاج داخل المودال */}
+                    </div>
 
-                  {Array.isArray(selectedStory.acceptance_criteria) &&
-                  selectedStory.acceptance_criteria.length ? (
-                    <ul className="list-disc ms-5 text-slate-700 space-y-1">
-                      {selectedStory.acceptance_criteria.map((ac, i) => (
-                        <li key={i}>{ac}</li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <div className="text-slate-400">لا يوجد</div>
-                  )}
+                    {Array.isArray(selectedStory.acceptance_criteria) &&
+                    selectedStory.acceptance_criteria.length ? (
+                      <ol className="ms-5 list-decimal space-y-1 [text-indent:-.5rem] [padding-inline-start:.5rem] leading-7 text-slate-800">
+                        {selectedStory.acceptance_criteria.map((ac, i) => (
+                          <li key={i}>{ac}</li>
+                        ))}
+                      </ol>
+                    ) : (
+                      <div className="text-slate-400">لا يوجد</div>
+                    )}
+                  </section>
                 </div>
+              )}
 
-                <div className="flex items-center justify-between gap-2 mt-4">
-                  <button
-                    onClick={async () => {
-                      if (confirm("هل تريد حذف هذه الستوري نهائيًا؟")) {
-                        await hardDeleteStory();
-                      }
-                    }}
-                    className="px-3 h-10 rounded-lg border text-red-600 border-red-200 hover:bg-red-50"
-                    title="حذف نهائي"
-                  >
-                    حذف
-                  </button>
+              {/* تعديل */}
+              {editMode && (
+                <div className="space-y-4 max-w-prose">
+                  <div>
+                    <label className="block text-sm mb-1">العنوان</label>
+                    <input
+                      className="w-full border border-line focus:border-blue-400 focus:ring-2 focus:ring-blue-100 rounded-lg h-10 px-3 text-slate-900"
+                      value={formTitle}
+                      onChange={(e) => setFormTitle(e.target.value)}
+                      placeholder="عنوان الستوري"
+                    />
+                  </div>
 
-                  <div className="ms-auto flex items-center gap-2">
+                  <div>
+                    <label className="block text-sm mb-1">الوصف</label>
+                    <textarea
+                      className="w-full border border-line focus:border-blue-400 focus:ring-2 focus:ring-blue-100 rounded-lg p-2 min-h-[90px] text-slate-900"
+                      value={formDesc}
+                      onChange={(e) => setFormDesc(e.target.value)}
+                      placeholder="وصف مختصر للستوري…"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm mb-1">
+                      معايير القبول (كل سطر = معيار)
+                    </label>
+                    <textarea
+                      className="w-full border border-line focus:border-blue-400 focus:ring-2 focus:ring-blue-100 rounded-lg p-2 min-h-[120px] text-slate-900"
+                      value={formAC}
+                      onChange={(e) => setFormAC(e.target.value)}
+                      placeholder={"- يجب أن...\n- عند ... يحدث ..."}
+                    />
+                  </div>
+
+                  {/* التاج في التعديل فقط */}
+                  <div>
+                    <label className="block text-sm mb-1">التاج</label>
+                    <div className="flex items-center gap-2">
+                      <select
+                        className="h-9 text-sm rounded border border-line bg-white px-2"
+                        value={formTag}
+                        onChange={(e) => setFormTag(e.target.value as Tag)}
+                        title="Tag"
+                      >
+                        <option value="None">None</option>
+                        <option value="Critical">Critical</option>
+                        <option value="Enhancement">Enhancement</option>
+                        <option value="Blocked">Blocked</option>
+                      </select>
+                      <span
+                        className={clsx(
+                          "text-[11px] border rounded-full px-2 py-0.5",
+                          formTag === "Critical"
+                            ? "bg-red-50 text-red-700 border-red-200"
+                            : formTag === "Enhancement"
+                            ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                            : formTag === "Blocked"
+                            ? "bg-amber-50 text-amber-800 border-amber-200"
+                            : "bg-slate-50 text-slate-700 border-line"
+                        )}
+                      >
+                        {formTag}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Footer */}
+            <div className="flex items-center gap-2 px-5 py-3 border-t bg-surface/85 backdrop-blur rounded-b-2xl">
+              <button
+                onClick={async () => {
+                  if (confirm("هل تريد حذف هذه الستوري نهائيًا؟"))
+                    await hardDeleteStory();
+                }}
+                className="px-3 h-10 rounded-lg border text-red-600 border-red-200 hover:bg-red-50"
+                title="حذف نهائي"
+              >
+                حذف
+              </button>
+
+              <div className="ms-auto flex items-center gap-2">
+                {!editMode ? (
+                  <>
                     <button
                       onClick={() => setEditMode(true)}
                       className="px-4 h-10 rounded-lg border hover:bg-slate-50"
@@ -3214,103 +3405,12 @@ export default function Home() {
                     >
                       إغلاق
                     </button>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* وضع التعديل */}
-            {/* وضع التعديل */}
-            {editMode && (
-              <div className="space-y-3">
-                {/* العنوان */}
-                <div>
-                  <label className="block text-sm mb-1">العنوان</label>
-                  <input
-                    className="w-full border border-line focus:border-blue-400 focus:ring-2 focus:ring-blue-100 rounded-lg h-10 px-3 text-slate-900"
-                    value={formTitle}
-                    onChange={(e) => setFormTitle(e.target.value)}
-                    placeholder="عنوان الستوري"
-                  />
-                </div>
-
-                {/* الوصف */}
-                <div>
-                  <label className="block text-sm mb-1">الوصف</label>
-                  <textarea
-                    className="w-full border border-line focus:border-blue-400 focus:ring-2 focus:ring-blue-100 rounded-lg p-2 min-h-[90px] text-slate-900"
-                    value={formDesc}
-                    onChange={(e) => setFormDesc(e.target.value)}
-                    placeholder="وصف مختصر للستوري…"
-                  />
-                </div>
-
-                {/* معايير القبول */}
-                <div>
-                  <label className="block text-sm mb-1">
-                    معايير القبول (كل سطر = معيار)
-                  </label>
-                  <textarea
-                    className="w-full border border-line focus:border-blue-400 focus:ring-2 focus:ring-blue-100 rounded-lg p-2 min-h-[120px] text-slate-900"
-                    value={formAC}
-                    onChange={(e) => setFormAC(e.target.value)}
-                    placeholder={"- يجب أن...\n- عند ... يحدث ..."}
-                  />
-                </div>
-
-                {/* التـــاج (هنا مكانه الصحيح) */}
-                <div>
-                  <label className="block text-sm mb-1">التاج</label>
-                  <div className="flex items-center gap-2">
-                    <select
-                      className="h-9 text-sm rounded border border-line bg-white px-2"
-                      value={formTag}
-                      onChange={(e) => setFormTag(e.target.value as Tag)}
-                      title="Tag"
-                    >
-                      <option value="None">None</option>
-                      <option value="Critical">Critical</option>
-                      <option value="Enhancement">Enhancement</option>
-                      <option value="Blocked">Blocked</option>
-                    </select>
-
-                    {/* معاينة لون التاج */}
-                    <span
-                      className={clsx(
-                        "text-[11px] border rounded-full px-2 py-0.5",
-                        formTag === "Critical"
-                          ? "bg-red-50 text-red-700 border-red-200"
-                          : formTag === "Enhancement"
-                          ? "bg-emerald-50 text-emerald-700 border-emerald-200"
-                          : formTag === "Blocked"
-                          ? "bg-amber-50 text-amber-800 border-amber-200"
-                          : "bg-slate-50 text-slate-700 border-line"
-                      )}
-                    >
-                      {formTag}
-                    </span>
-                  </div>
-                </div>
-
-                {/* أزرار */}
-                <div className="flex items-center justify-between gap-2 mt-4">
-                  <button
-                    onClick={async () => {
-                      if (confirm("هل تريد حذف هذه الستوري نهائيًا؟")) {
-                        await hardDeleteStory();
-                      }
-                    }}
-                    className="px-3 h-10 rounded-lg border text-red-600 border-red-200 hover:bg-red-50"
-                    title="حذف نهائي"
-                  >
-                    حذف
-                  </button>
-
-                  <div className="ms-auto flex items-center gap-2">
+                  </>
+                ) : (
+                  <>
                     <button
                       onClick={() => {
                         setEditMode(false);
-                        // رجع الفورم لقيم الستوري الأصلية
                         setFormTitle(selectedStory?.title ?? "");
                         setFormDesc(selectedStory?.description ?? "");
                         setFormAC(
@@ -3319,11 +3419,10 @@ export default function Home() {
                             : (selectedStory?.acceptance_criteria as unknown as string) ??
                                 ""
                         );
-                        if (!selectedStory) return;
-
                         setFormTag(
-                          (storyTags[selectedStory.id ?? selectedStory.title] ??
-                            "None") as Tag
+                          (storyTags[
+                            selectedStory!.id ?? selectedStory!.title
+                          ] ?? "None") as Tag
                         );
                       }}
                       className="px-3 h-10 rounded-lg border"
@@ -3342,10 +3441,10 @@ export default function Home() {
                     >
                       {saving ? "جارٍ الحفظ…" : savedTick ? "تم" : "حفظ"}
                     </button>
-                  </div>
-                </div>
+                  </>
+                )}
               </div>
-            )}
+            </div>
           </motion.div>
         </div>
       )}
