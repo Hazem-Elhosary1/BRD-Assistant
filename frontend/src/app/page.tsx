@@ -5,6 +5,46 @@
    ========================================================================== */
 
 "use client";
+// === Mermaid helpers (top-level) ===
+function extractMermaidCode(input?: string | null): string | null {
+  if (!input) return null;
+  const str = String(input);
+  const fenced = str.match(/```mermaid\s*([\s\S]*?)```/i);
+  if (fenced) return fenced[1].trim();
+  const start = str.search(
+    /\b(graph|flowchart|sequenceDiagram|gantt|classDiagram|stateDiagram(?:-v2)?|erDiagram|pie)\b/i
+  );
+  if (start >= 0) {
+    const rest = str.slice(start);
+    const stop = rest.search(/```/);
+    return (stop >= 0 ? rest.slice(0, stop) : rest).trim();
+  }
+  return null;
+}
+
+function cleanMermaidCode(input?: string | null): string {
+  if (!input) return "";
+  let code = String(input);
+  const block = code.match(/```mermaid\s*([\s\S]*?)```/i);
+  if (block) code = block[1];
+  code = code.replace(/```(?:mermaid)?/gi, "").replace(/```/g, "");
+  code = code.replace(/<\/?[^>]+>/g, "");
+  code = code.replace(/\r\n/g, "\n").trim();
+
+  const indices = [
+    code.search(/\bgraph\s+(?:TD|TB|LR|RL|BT)?\b/i),
+    code.search(/\bflowchart\s+(?:TD|TB|LR|RL|BT)?\b/i),
+    code.search(/\bsequenceDiagram\b/i),
+    code.search(/\bgantt\b/i),
+    code.search(/\bclassDiagram\b/i),
+    code.search(/\bstateDiagram(?:-v2)?\b/i),
+    code.search(/\berDiagram\b/i),
+    code.search(/\bpie\s+title\b/i),
+  ].filter((i) => i >= 0);
+
+  if (indices.length) code = code.slice(Math.min(...indices));
+  return code.trim();
+}
 
 // -------------------- Imports --------------------
 import React, {
@@ -36,6 +76,7 @@ import {
   Trash2,
   Edit3,
   RefreshCw,
+  Search, X ,
   Download,
   Lightbulb,
   Moon,
@@ -44,6 +85,8 @@ import {
   Sun,
   Monitor,
   ArrowUp,
+ Clock3,
+
 } from "lucide-react";
 // -------------------- Imports --------------------
 import clsx from "clsx";
@@ -62,6 +105,14 @@ function getApiBase() {
 }
 
 /* -------------------------- Types -------------------------- */
+type Thread = {
+  id: string;
+  title: string;
+  messages: ChatMessage[];
+  draft?: string;
+  updatedAt: number;
+};
+
 type ChatMessage = {
   id: number;
   role: "user" | "assistant";
@@ -184,7 +235,8 @@ async function readSSEStream(
 
 /* -------------------------- Page -------------------------- */
 const LS_KEYS = {
-  messages: "brd_messages",
+  threads: "brd_threads",
+  activeThreadId: "brd_active_thread",
   stories: "brd_stories",
   insights: "brd_insights",
 };
@@ -208,21 +260,163 @@ function debounce<A extends unknown[]>(fn: (...args: A) => void, ms = 400) {
 
 // ---------------- Root Component ----------------
 export default function Home() {
+  const [titleEditing, setTitleEditing] = useState(false);
+const [titleDraft, setTitleDraft] = useState("");
+
+const saveThreadTitle = () => {
+  if (!activeThreadId) return;
+  const v = titleDraft.trim();
+  if (!v) return setTitleEditing(false);
+  setThreads(prev =>
+    prev.map(t => (t.id === activeThreadId ? { ...t, title: v, updatedAt: Date.now() } : t))
+  );
+  setTitleEditing(false);
+};
+
   const idRef = useRef(1);
   const chatRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  // ===== Threads state =====
+  const greeting: ChatMessage = {
+    id: idRef.current++,
+    role: "assistant",
+    content: "أهلًا! ارفع الـBRD أو ابعتلي نص، وأنا هساعدك.",
+    timestamp: Date.now(),
+  };
+const [modalTag, setModalTag] = useState<Tag>("None");
 
-  const [messages, setMessages] = useState<ChatMessage[]>([
-    {
+  const [threads, setThreads] = useState<Thread[]>([]);
+  const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
+
+  // helper لقراءة الثريد الحالي
+  const activeThread = useMemo(
+    () => threads.find((t) => t.id === activeThreadId) || null,
+    [threads, activeThreadId]
+  );
+  useEffect(() => {
+  setTitleDraft(activeThread?.title ?? "");
+}, [activeThreadId, activeThread?.title]);
+  // رسالة ترحيب لكل ثريد جديد
+  const makeGreeting = useCallback(
+    (): ChatMessage => ({
       id: idRef.current++,
       role: "assistant",
       content: "أهلًا! ارفع الـBRD أو ابعتلي نص، وأنا هساعدك.",
-      timestamp: Date.now(), // أضف التوقيت للرسالة الأولى
+      timestamp: Date.now(),
+    }),
+    []
+  );
+
+  const createThread = useCallback(() => {
+    const t: Thread = {
+      id: crypto?.randomUUID?.() ?? String(Date.now()),
+      title: `محادثة ${threads.length + 1}`,
+      messages: [makeGreeting()],
+      draft: "",
+      updatedAt: Date.now(),
+    };
+    setThreads((prev) => [t, ...prev]);
+    setActiveThreadId(t.id);
+  }, [threads.length, makeGreeting, setThreads, setActiveThreadId]);
+
+  const renameThread = useCallback((id: string) => {
+    const name = prompt("اسم المحادثة؟");
+    if (!name) return;
+    setThreads((prev) =>
+      prev.map((t) => (t.id === id ? { ...t, title: name } : t))
+    );
+  }, []);
+
+  const deleteThread = useCallback(
+    (id: string) => {
+      setThreads((prev) => {
+        const next = prev.filter((t) => t.id !== id);
+        // لو بتحذف الثريد النشط، انقل لأول واحد متبقّي
+        if (activeThreadId === id) {
+          setActiveThreadId(next[0]?.id ?? null);
+        }
+        return next;
+      });
     },
-  ]);
+    [activeThreadId, setActiveThreadId]
+  );
+
+  // اختياري: لو اتصفّر كل شيء، أنشئ ثريد جديد تلقائيًا
+  useEffect(() => {
+    if (threads.length === 0) createThread();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [threads.length]);
+
+  // ⚠️ ترحيل قديم: لو عندك LS للمessages القديمة هنحوّله لأول ثريد
+  useEffect(() => {
+    const savedThreads = safeParse<Thread[]>(
+      localStorage.getItem(LS_KEYS.threads),
+      []
+    );
+    const savedActive = localStorage.getItem(LS_KEYS.activeThreadId);
+
+    if (savedThreads.length) {
+      setThreads(savedThreads);
+      setActiveThreadId(savedActive || savedThreads[0]?.id || null);
+      return;
+    }
+
+    // ترحيل من المفتاح القديم brd_messages إن وجد
+    const legacyMsgs = safeParse<ChatMessage[]>(
+      localStorage.getItem("brd_messages"),
+      []
+    );
+    const messages = activeThread?.messages ?? [];
+
+    const initialThread: Thread = {
+      id: crypto?.randomUUID?.() ?? String(Date.now()),
+      title: "محادثة جديدة",
+      messages: legacyMsgs.length ? legacyMsgs : [greeting],
+      updatedAt: Date.now(),
+    };
+    setThreads([initialThread]);
+    setActiveThreadId(initialThread.id);
+
+    // تنظيف القديم اختيارياً
+    localStorage.removeItem("brd_messages");
+  }, []);
+
+  function updateActiveThreadMessages(
+    updater: (prev: ChatMessage[]) => ChatMessage[]
+  ) {
+    setThreads((prev) =>
+      prev.map((t) => {
+        if (t.id !== activeThreadId) return t;
+        return { ...t, messages: updater(t.messages), updatedAt: Date.now() };
+      })
+    );
+  }
+
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const [dark, setDark] = useState(false);
   const [input, setInput] = useState("");
+  useEffect(() => {
+    setInput(activeThread?.draft ?? "");
+    requestAnimationFrame(resetComposerHeight);
+  }, [activeThreadId]);
+  // حفظ الدرافت تلقائيًا كل 700ms
+  const persistDraft = useMemo(
+    () =>
+      debounce((val: string) => {
+        setThreads((prev) =>
+          prev.map((t) => {
+            if (t.id !== activeThreadId) return t;
+            return { ...t, draft: val };
+          })
+        );
+      }, 700),
+    [activeThreadId]
+  );
+
+  useEffect(() => {
+    persistDraft(input);
+  }, [input, persistDraft]);
+
   const [sendLoading, setSendLoading] = useState(false);
   const [opLoading, setOpLoading] = useState(false);
   const [patchLoading, setPatchLoading] = useState(false);
@@ -256,9 +450,9 @@ export default function Home() {
   }>(null);
   const [persistEnabled] = useState(true);
   const [showScrollTop, setShowScrollTop] = useState(false);
-const [editMode, setEditMode] = useState(false);
-const [saving, setSaving] = useState(false);
-const [savedTick, setSavedTick] = useState(false);
+  const [editMode, setEditMode] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [savedTick, setSavedTick] = useState(false);
 
   type UploadTask = {
     name: string;
@@ -266,9 +460,12 @@ const [savedTick, setSavedTick] = useState(false);
     status: "uploading" | "done" | "error";
   };
   // =============== Story Tags (local only) ===============
+  type SortMode = "recent" | "oldest" | "az" | "za" | "with-ac";
+
   type Tag = "None" | "Critical" | "Enhancement" | "Blocked";
   const [storyTags, setStoryTags] = useState<Record<string | number, Tag>>({});
-
+const [filterTag, setFilterTag] = useState<Tag | "All">("All");
+const [sortMode, setSortMode] = useState<SortMode>("recent");
   const resetComposerHeight = () => {
     const ta = composerRef.current;
     if (!ta) return;
@@ -337,12 +534,12 @@ const [savedTick, setSavedTick] = useState(false);
     const id = setInterval(checkOpenAI, 15000);
     return () => clearInterval(id);
   }, []);
- function openModal(story: Story) {
-  setSelectedStory(story);
-  setEditMode(false);           // ← يبدأ كعرض فقط
-  setOpen(true);
-}
-function closeModal() {
+  function openModal(story: Story) {
+    setSelectedStory(story);
+    setEditMode(false); // ← يبدأ كعرض فقط
+    setOpen(true);
+  }
+  function closeModal() {
     setSelectedStory(null);
     setOpen(false);
   }
@@ -363,47 +560,54 @@ function closeModal() {
     );
   }, [selectedStory]);
 
-async function saveStory() {
-  if (!selectedStory?.id) return;
-  const nacArr = formAC.split(/\r?\n/).map(t => t.trim()).filter(Boolean);
+  async function saveStory() {
+    if (!selectedStory?.id) return;
+    const nacArr = formAC
+      .split(/\r?\n/)
+      .map((t) => t.trim())
+      .filter(Boolean);
 
-  try {
-    setSaving(true);
-    const res = await fetch(`${getApiBase()}/stories/${selectedStory.id}`, {
-      method: "PUT",
-      headers: getHeaders({ "Content-Type": "application/json" }),
-      body: JSON.stringify({
-        title: formTitle,
-        description: formDesc,
-        acceptance_criteria: nacArr,
-      }),
-    });
-    if (!res.ok) {
-      const msg = await res.text().catch(() => "");
-      throw new Error(`Update failed: ${res.status} ${msg}`);
+    try {
+      setSaving(true);
+      const res = await fetch(`${getApiBase()}/stories/${selectedStory.id}`, {
+        method: "PUT",
+        headers: getHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({
+          title: formTitle,
+          description: formDesc,
+          acceptance_criteria: nacArr,
+        }),
+      });
+      if (!res.ok) {
+        const msg = await res.text().catch(() => "");
+        throw new Error(`Update failed: ${res.status} ${msg}`);
+      }
+
+      // تحديث محلي سريع
+      setStories((list) =>
+        list.map((x) =>
+          x.id === selectedStory.id
+            ? {
+                ...x,
+                title: formTitle,
+                description: formDesc,
+                acceptance_criteria: nacArr,
+              }
+            : x
+        )
+      );
+
+      await refreshStories?.(); // توحيد مع السيرفر
+      toast.success("تم حفظ التعديل");
+      setEditMode(false); // ← ارجع لوضع العرض
+      setSavedTick(true); // ← إظهار "تم" لحظيًا
+      setTimeout(() => setSavedTick(false), 1200);
+    } catch {
+      toast.error("فشل حفظ التعديل");
+    } finally {
+      setSaving(false);
     }
-
-    // تحديث محلي سريع
-    setStories(list =>
-      list.map(x =>
-        x.id === selectedStory.id
-          ? { ...x, title: formTitle, description: formDesc, acceptance_criteria: nacArr }
-          : x
-      )
-    );
-
-    await refreshStories?.();      // توحيد مع السيرفر
-    toast.success("تم حفظ التعديل");
-    setEditMode(false);            // ← ارجع لوضع العرض
-    setSavedTick(true);            // ← إظهار "تم" لحظيًا
-    setTimeout(() => setSavedTick(false), 1200);
-  } catch {
-    toast.error("فشل حفظ التعديل");
-  } finally {
-    setSaving(false);
   }
-}
-
 
   async function hardDeleteStory() {
     if (!selectedStory?.id) return;
@@ -580,11 +784,13 @@ async function saveStory() {
   }, [patchOpen, appendOpen, settingsOpen]);
 
   useEffect(() => {
-    chatRef.current?.scrollTo({
-      top: chatRef.current.scrollHeight,
-      behavior: "smooth",
-    });
-  }, [messages]);
+    if (chatRef.current) {
+      chatRef.current.scrollTo({
+        top: chatRef.current.scrollHeight,
+        behavior: "smooth",
+      });
+    }
+  }, [activeThread?.messages]);
 
   useEffect(() => {
     if (typeof window !== "undefined") {
@@ -593,33 +799,45 @@ async function saveStory() {
       setApiBaseInput(getApiBase());
     }
   }, []);
-  {
-    helpCmds.map((c, i) => (
-      <button key={`${c.insert}-${i}`} /* ... */>
-        {c.icon} {c.label}
-      </button>
-    ));
-  }
 
-  const filteredStories = useMemo(() => {
-    const q = backlogQuery.trim().toLowerCase();
-    if (!q) return stories;
+const filteredStories = useMemo(() => {
+  const q = backlogQuery.trim().toLowerCase();
 
-    // norm: يحوّل أي قيمة لستـرنج
-    const norm = (v: unknown): string => {
-      if (Array.isArray(v)) {
-        return v.map((x) => norm(x)).join(" "); // recursion لكن return دايمًا string
-      }
-      if (v == null) return "";
-      return String(v);
-    };
+  // 1) فلترة بالتاج (لو اختير Tag معيّن)
+  let out = stories.filter(s => {
+    if (filterTag !== "All") {
+      const tag = storyTags[s.id ?? s.title] ?? "None";
+      if (tag !== filterTag) return false;
+    }
+    if (!q) return true;
 
-    return stories.filter((s) =>
-      [s.title, s.description, s.acceptance_criteria]
-        .filter((x) => x != null)
-        .some((t) => norm(t).toLowerCase().includes(q))
-    );
-  }, [stories, backlogQuery]);
+    // 2) بحث نصّي
+    const norm = (v: unknown): string =>
+      Array.isArray(v) ? v.map(norm).join(" ") : v == null ? "" : String(v);
+    return [s.title, s.description, s.acceptance_criteria]
+      .filter(Boolean)
+      .some(t => norm(t).toLowerCase().includes(q));
+  });
+
+  // 3) فرز
+  out = [...out].sort((a, b) => {
+    const byTitle = (x: Story) => (x.title || "").toLowerCase();
+    const hasAC = (x: Story) =>
+      Array.isArray(x.acceptance_criteria) && x.acceptance_criteria.length ? 1 : 0;
+
+    switch (sortMode) {
+      case "az": return byTitle(a).localeCompare(byTitle(b), "ar");
+      case "za": return byTitle(b).localeCompare(byTitle(a), "ar");
+      case "oldest": return 1;            // يحافظ على الترتيب ثم نقلب تحت بالـpage لو حبيت
+      case "with-ac": return hasAC(b) - hasAC(a) || byTitle(a).localeCompare(byTitle(b), "ar");
+      case "recent":
+      default: return 0;                  // أبقِ الترتيب كما هو (أحدث أعلى عندك)
+    }
+  });
+
+  return out;
+}, [stories, backlogQuery, filterTag, sortMode, storyTags]);
+
 
   const [page, setPage] = useState(1);
   const pageSize = 10;
@@ -637,28 +855,38 @@ async function saveStory() {
   // Load persisted
   useEffect(() => {
     if (!persistEnabled) return;
-    const savedMsgs = safeParse<ChatMessage[]>(
-      localStorage.getItem(LS_KEYS.messages),
+
+    // اقرأ الثريدات
+    const savedThreads = safeParse<Thread[]>(
+      localStorage.getItem(LS_KEYS.threads),
       []
     );
-    if (savedMsgs.length) setMessages(savedMsgs);
+    const savedActive = localStorage.getItem(LS_KEYS.activeThreadId);
 
-    const savedStories = safeParse<Story[]>(
-      localStorage.getItem(LS_KEYS.stories),
+    if (savedThreads.length) {
+      setThreads(savedThreads);
+      setActiveThreadId(savedActive || savedThreads[0]?.id || null);
+      return;
+    }
+
+    // --- Migration من المفتاح القديم brd_messages ---
+    const legacyMsgs = safeParse<ChatMessage[]>(
+      localStorage.getItem("brd_messages"),
       []
     );
-    if (savedStories.length) setStories(savedStories);
+    if (legacyMsgs.length) {
+      const initialThread: Thread = {
+        id: crypto?.randomUUID?.() ?? String(Date.now()),
+        title: "محادثة قديمة",
+        messages: legacyMsgs,
+        draft: "",
+        updatedAt: Date.now(),
+      };
+      setThreads([initialThread]);
+      setActiveThreadId(initialThread.id);
 
-    const savedInsights = safeParse<Insights>(
-      localStorage.getItem(LS_KEYS.insights),
-      { gaps: [], risks: [], metrics: [] }
-    );
-    if (
-      savedInsights.gaps.length ||
-      savedInsights.risks.length ||
-      savedInsights.metrics.length
-    ) {
-      setInsights(savedInsights);
+      // ممكن تنظف المفتاح القديم بعد ما تهاجر
+      localStorage.removeItem("brd_messages");
     }
   }, [persistEnabled]);
 
@@ -723,7 +951,7 @@ async function saveStory() {
         }),
       });
 
-      setMessages((p) => [
+      updateActiveThreadMessages((p) => [
         ...p,
         {
           id: idRef.current++,
@@ -752,28 +980,55 @@ async function saveStory() {
   }, [refreshAll]);
 
   // Persist messages
-  const persistMessages = useMemo(
+  // Persist threads
+  const persistThreads = useMemo(
     () =>
-      debounce((data: ChatMessage[]) => {
-        const trimmed = data.slice(-300);
-        localStorage.setItem(LS_KEYS.messages, JSON.stringify(trimmed));
+      debounce((data: Thread[]) => {
+        localStorage.setItem(LS_KEYS.threads, JSON.stringify(data));
       }, 500),
     []
   );
-  useEffect(() => {
-    if (!mermaidCode) return;
-    mermaid.initialize({ startOnLoad: false, theme: "default" });
-    const code = cleanMermaidCode(mermaidCode);
-    mermaid.render("ai-flowchart-svg", code).then(({ svg }) => {
-      setMermaidSvg(svg);
-    });
-  }, [mermaidCode]);
-  useEffect(() => {
-    if (!persistEnabled) return;
-    persistMessages(messages);
-  }, [messages, persistEnabled, persistMessages]);
 
-  // Persist stories
+  // حفظ الثريدز و الـ activeThreadId
+  useEffect(() => {
+    persistThreads(threads);
+    if (activeThreadId) {
+      localStorage.setItem(LS_KEYS.activeThreadId, activeThreadId);
+    }
+  }, [threads, activeThreadId, persistThreads]);
+
+  // لو مش عندك بالفعل:
+  function extractMermaidCode(content: string): string | null {
+    const m = content.match(/```mermaid([\s\S]*?)```/i);
+    return m ? m[1].trim() : null;
+  }
+
+  // التقاط آخر كود mermaid من ردود المساعد ورسمه
+  useEffect(() => {
+    const lastMermaid = activeThread?.messages
+      .filter((m) => m.role === "assistant")
+      .map((m) => extractMermaidCode(m.content))
+      .filter(Boolean)
+      .at(-1);
+
+    if (!lastMermaid) return;
+
+    setMermaidCode(lastMermaid); // خزّن الكود الخام
+
+    try {
+      mermaid.initialize({ startOnLoad: false, theme: "default" });
+      const code = cleanMermaidCode(lastMermaid);
+      mermaid
+        .render(`ai-flowchart-svg-${Date.now()}`, code)
+        .then(({ svg }) => setMermaidSvg(svg));
+    } catch (err) {
+      console.error(err);
+      toast?.error?.("Mermaid syntax error");
+      setMermaidSvg("");
+    }
+  }, [activeThread?.messages]);
+
+  // ===== Persist stories =====
   const persistStories = useMemo(
     () =>
       debounce((data: Story[]) => {
@@ -781,12 +1036,13 @@ async function saveStory() {
       }, 500),
     []
   );
+
   useEffect(() => {
     if (!persistEnabled) return;
     persistStories(stories);
   }, [stories, persistEnabled, persistStories]);
 
-  // Persist insights
+  // ===== Persist insights =====
   const persistInsights = useMemo(
     () =>
       debounce((data: Insights) => {
@@ -794,6 +1050,7 @@ async function saveStory() {
       }, 500),
     []
   );
+
   useEffect(() => {
     if (!persistEnabled) return;
     persistInsights(insights);
@@ -843,6 +1100,34 @@ async function saveStory() {
     }
     if (fileRef.current) fileRef.current.value = "";
   }
+// === Thread auto-naming (from BRD filename) ===
+const basename = (n: string) => n.replace(/\.[^./\\]+$/i, "").trim();
+
+const isDefaultThreadTitle = (t?: string) => {
+  const s = (t || "").trim();
+  return (
+    s === "" ||
+    /^محادثة/.test(s) ||           // "محادثة جديدة/قديمة/..."
+    /^Untitled/i.test(s) ||
+    /^New chat/i.test(s)
+  );
+};
+
+const renameActiveThreadIfDefault = useCallback((newTitle: string) => {
+  if (!activeThreadId) return;
+  const title = basename(newTitle);
+  if (!title) return;
+
+  setThreads(prev =>
+    prev.map(t =>
+      t.id === activeThreadId
+        ? (isDefaultThreadTitle(t.title)
+            ? { ...t, title, updatedAt: Date.now() }
+            : t)
+        : t
+    )
+  );
+}, [activeThreadId, setThreads]);
 
   async function doUpload(file: File) {
     const task: UploadTask = {
@@ -870,52 +1155,56 @@ async function saveStory() {
         }
       };
 
-      xhr.onload = () => {
-        try {
-          const data = JSON.parse(xhr.responseText || "{}");
-          if (xhr.status >= 200 && xhr.status < 300) {
-            setUploads((prev) =>
-              prev.map((t) =>
-                t.name === file.name
-                  ? { ...t, status: "done", progress: 100 }
-                  : t
-              )
-            );
+  xhr.onload = () => {
+  try {
+    const data = JSON.parse(xhr.responseText || "{}");
+    const suggested = data.title || data.filename || data.fileName || file.name;
+renameActiveThreadIfDefault(suggested);
 
-            // ✅ استقبل brdId بدل uploadId
-            if (data.brdId) {
-              setBrdId(Number(data.brdId));
-            } else {
-              console.warn("No brdId in /upload response");
-            }
+    if (xhr.status >= 200 && xhr.status < 300) {
+      setUploads((prev) =>
+        prev.map((t) =>
+          t.name === file.name ? { ...t, status: "done", progress: 100 } : t
+        )
+      );
 
-            setMessages((p) => [
-              ...p,
-              {
-                id: idRef.current++,
-                role: "assistant",
-                content: `تم رفع BRD (${file.name}).`,
-              },
-            ]);
-            toast.success(`تم رفع ${file.name}`);
-            void refreshAll();
-          } else {
-            setUploads((prev) =>
-              prev.map((t) =>
-                t.name === file.name ? { ...t, status: "error" } : t
-              )
-            );
-            toast.error(`فشل رفع ${file.name} (HTTP ${xhr.status})`);
-          }
-        } catch (e) {
-          setUploads((prev) =>
-            prev.map((t) =>
-              t.name === file.name ? { ...t, status: "error" } : t
-            )
-          );
-          toast.error(`فشل قراءة رد الرفع`);
-        }
-      };
+      if (data.brdId) {
+        setBrdId(Number(data.brdId));
+      } else {
+        console.warn("No brdId in /upload response");
+      }
+
+      // ✅ سمّي الثريد باسم الملف/العنوان الراجع من السيرفر لو العنوان لسه افتراضي
+      const suggested =
+        data.title || data.filename || data.fileName || data.name || file.name;
+      renameActiveThreadIfDefault(suggested);
+
+      updateActiveThreadMessages((p) => [
+        ...p,
+        {
+          id: idRef.current++,
+          role: "assistant",
+          content: `تم رفع BRD (${file.name}).`,
+        },
+      ]);
+      toast.success(`تم رفع ${file.name}`);
+      void refreshAll();
+    } else {
+      setUploads((prev) =>
+        prev.map((t) =>
+          t.name === file.name ? { ...t, status: "error" } : t
+        )
+      );
+      toast.error(`فشل رفع ${file.name} (HTTP ${xhr.status})`);
+    }
+  } catch (e) {
+    setUploads((prev) =>
+      prev.map((t) => (t.name === file.name ? { ...t, status: "error" } : t))
+    );
+    toast.error(`فشل قراءة رد الرفع`);
+  }
+};
+
 
       xhr.onerror = () => {
         setUploads((prev) =>
@@ -973,7 +1262,7 @@ async function saveStory() {
     setError(null);
 
     const msgId = idRef.current++;
-    setMessages((p) => [
+    updateActiveThreadMessages((p) => [
       ...p,
       {
         id: msgId,
@@ -996,14 +1285,14 @@ async function saveStory() {
       stop();
       setOpProgress(100);
 
-      setMessages((p) =>
+      updateActiveThreadMessages((p) =>
         p.map((m) => (m.id === msgId ? { ...m, content: data.summary } : m))
       );
       toast.success("تم توليد ملخص");
     } catch (e) {
       stop();
       const msg = errorMessage(e) || "تعذّر التلخيص";
-      setMessages((p) =>
+      updateActiveThreadMessages((p) =>
         p.map((m) => (m.id === msgId ? { ...m, content: `⚠️ ${msg}` } : m))
       );
       toast.error(msg);
@@ -1026,7 +1315,7 @@ async function saveStory() {
     setError(null);
 
     const msgId = idRef.current++;
-    setMessages((p) => [
+    updateActiveThreadMessages((p) => [
       ...p,
       {
         id: msgId,
@@ -1062,7 +1351,7 @@ async function saveStory() {
       setOpProgress(100);
 
       setStories(data.stories || []);
-      setMessages((p) =>
+      updateActiveThreadMessages((p) =>
         p.map((m) =>
           m.id === msgId
             ? {
@@ -1077,7 +1366,7 @@ async function saveStory() {
     } catch (e: unknown) {
       stop();
       const msg = errorMessage(e) || "تعذّر التوليد";
-      setMessages((p) =>
+      updateActiveThreadMessages((p) =>
         p.map((m) => (m.id === msgId ? { ...m, content: `⚠️ ${msg}` } : m))
       );
       toast.error(msg);
@@ -1216,7 +1505,7 @@ async function saveStory() {
           "تقدر كمان تختار من البابلز فوق الإنبت 👇",
         ].join("\n");
 
-        setMessages((p) => [
+        updateActiveThreadMessages((p) => [
           ...p,
           { id: idRef.current++, role: "assistant", content: helpMd },
         ]);
@@ -1246,11 +1535,12 @@ async function saveStory() {
   const sendMessage = useCallback(
     async (overrideText?: string): Promise<void> => {
       const raw = overrideText ?? input;
-      if (!raw.trim() || sendLoading) return;
+      if (!raw.trim() || sendLoading || !activeThreadId) return;
 
+      // امسح الإنپوت فورًا
       if (!overrideText) {
         setInput("");
-        requestAnimationFrame(resetComposerHeight); // ← هنا بيرجع الارتفاع للصغير بعد ما يتفضّى
+        requestAnimationFrame(resetComposerHeight);
       }
 
       setSendLoading(true);
@@ -1262,12 +1552,14 @@ async function saveStory() {
         content: raw,
         timestamp: Date.now(),
       };
-      setMessages((p) => [...p, userMsg]);
-      if (!overrideText) setInput("");
+
+      // اضف رسالة المستخدم
+      updateActiveThreadMessages((prev) => [...prev, userMsg]);
 
       const botId = idRef.current++;
-      setMessages((p) => [
-        ...p,
+      // ضع مكان للرد
+      updateActiveThreadMessages((prev) => [
+        ...prev,
         {
           id: botId,
           role: "assistant",
@@ -1291,31 +1583,39 @@ async function saveStory() {
         let acc = "";
         await readSSEStream(res, (chunk) => {
           acc += chunk;
-          setMessages((p) =>
-            p.map((m) =>
+          // عدّل رسالة البوت الأخيرة
+          updateActiveThreadMessages((prev) =>
+            prev.map((m) =>
               m.id === botId ? { ...m, content: acc, typing: true } : m
             )
           );
         });
-        setMessages((p) =>
-          p.map((m) => (m.id === botId ? { ...m, typing: false } : m))
+        updateActiveThreadMessages((prev) =>
+          prev.map((m) => (m.id === botId ? { ...m, typing: false } : m))
+        );
+
+        // بعد الإرسال الناجح امسح الدرافت
+        setThreads((prev) =>
+          prev.map((t) => (t.id === activeThreadId ? { ...t, draft: "" } : t))
         );
       } catch (e: unknown) {
-        let msg = errorMessage(e);
-        if (e instanceof DOMException && e.name === "AbortError")
-          msg = "انتهت المهلة، جرّب تاني.";
+        const msg =
+          e instanceof DOMException && e.name === "AbortError"
+            ? "انتهت المهلة، جرّب تاني."
+            : errorMessage(e);
+
         setError(msg);
-        toast.error(msg);
-        setMessages((p) =>
-          p.map((m) =>
+        updateActiveThreadMessages((prev) =>
+          prev.map((m) =>
             m.id === botId ? { ...m, content: msg, typing: false } : m
           )
         );
+        toast.error(msg);
       } finally {
         setSendLoading(false);
       }
     },
-    [input, sendLoading, handleCommand]
+    [input, sendLoading, activeThreadId]
   );
 
   const runQuick = useCallback(
@@ -1374,7 +1674,7 @@ async function saveStory() {
         body: JSON.stringify({ type: appendType, content: appendText }),
       });
 
-      setMessages((p) => [
+      updateActiveThreadMessages((p) => [
         ...p,
         {
           id: idRef.current++,
@@ -1658,46 +1958,143 @@ async function saveStory() {
         )}
       </AnimatePresence>
 
-      {/* Insights */}
-      <aside className="col-span-3 bg-surface rounded-xl shadow p-4 text-foreground">
-        <div className="flex items-center justify-between">
-          <h3 className="font-semibold text-slate-700">Insights</h3>
-          <button
-            onClick={() => {
-              void refreshInsights();
-              toast.info("تم تحديث Insights");
-            }}
-            className="text-xs text-blue-600 hover:underline"
-          >
-            تحديث
-          </button>
-        </div>
-        <ul className="text-sm space-y-3 mt-3 pe-1 overflow-y-auto max-h-[70vh]">
-          {insights.gaps.map((g, i) => (
-            <li key={`g${i}`} className="flex items-start gap-2 text-amber-700">
-              ⚠️ <span>{g}</span>
+
+{/* Left sidebar: Threads + Insights */}
+<aside className="col-span-3 text-foreground">
+  <div className="space-y-4">
+    {/* Threads card */}
+    <section className="bg-surface rounded-xl shadow p-3 border border-line">
+      <div className="flex items-center justify-between mb-2">
+        <h3 className="font-semibold text-slate-700">Threads</h3>
+        <button
+          onClick={createThread}
+          className="text-xs px-2 h-7 rounded border bg-white hover:bg-slate-50"
+          title="ثريد جديد"
+        >
+          جديد
+        </button>
+      </div>
+
+      <ul className="space-y-1 max-h-[32vh] overflow-y-auto pe-1">
+        {threads.map(t => {
+          const isActive = t.id === activeThreadId;
+          return (
+            <li
+              key={t.id}
+              onClick={() => setActiveThreadId(t.id)}
+              title={t.title}
+              className={clsx(
+                "group grid grid-cols-[1fr_auto] items-center gap-2 px-2 py-2 rounded border cursor-pointer",
+                isActive
+                  ? "bg-blue-50 border-blue-200 text-blue-700"
+                  : "bg-white hover:bg-slate-50 border-line text-slate-700"
+              )}
+            >
+              <div className="min-w-0">
+                <div className="truncate text-sm">{t.title || "محادثة"}</div>
+                <div className="text-[11px] text-slate-500">
+                  {t.messages.length} رسالة • {new Date(t.updatedAt).toLocaleTimeString("ar", { hour: "2-digit", minute: "2-digit", hour12: true })}
+                </div>
+              </div>
+
+              <div className="shrink-0 flex items-center gap-1 opacity-70 group-hover:opacity-100">
+                <button
+                  onClick={(e) => { e.stopPropagation(); renameThread(t.id); }}
+                  className="p-1 rounded border hover:bg-slate-50"
+                  title="إعادة تسمية"
+                >
+                  <Edit3 className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (confirm("حذف هذه المحادثة؟")) deleteThread(t.id);
+                  }}
+                  className="p-1 rounded border border-red-200 text-red-600 hover:bg-red-50"
+                  title="حذف"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+              </div>
             </li>
-          ))}
-          {insights.risks.map((r, i) => (
-            <li key={`r${i}`} className="flex items-start gap-2 text-red-600">
-              ⚠️ <span>{r}</span>
-            </li>
-          ))}
-          {insights.metrics.map((m, i) => (
-            <li key={`m${i}`} className="flex items-start gap-2 text-blue-700">
-              📊 <span>{m}</span>
-            </li>
-          ))}
-          {!insights.gaps.length &&
-            !insights.risks.length &&
-            !insights.metrics.length && (
-              <li className="text-slate-400 text-sm">لا توجد إنسايتس بعد.</li>
-            )}
-        </ul>
-      </aside>
+          );
+        })}
+        {threads.length === 0 && (
+          <li className="text-slate-400 text-sm">لا توجد محادثات بعد.</li>
+        )}
+      </ul>
+    </section>
+
+    {/* Insights card */}
+    <section className="bg-surface rounded-xl shadow p-4 border border-line">
+      <div className="flex items-center justify-between">
+        <h3 className="font-semibold text-slate-700">Insights</h3>
+        <button
+          onClick={() => { void refreshInsights(); toast.info("تم تحديث Insights"); }}
+          className="text-xs text-blue-600 hover:underline"
+        >
+          تحديث
+        </button>
+      </div>
+      <ul className="text-sm space-y-3 mt-3 pe-1 max-h-[38vh] overflow-y-auto">
+        {insights.gaps.map((g, i) => (
+          <li key={`g${i}`} className="flex items-start gap-2 text-amber-700">⚠️ <span>{g}</span></li>
+        ))}
+        {insights.risks.map((r, i) => (
+          <li key={`r${i}`} className="flex items-start gap-2 text-red-600">⚠️ <span>{r}</span></li>
+        ))}
+        {insights.metrics.map((m, i) => (
+          <li key={`m${i}`} className="flex items-start gap-2 text-blue-700">📊 <span>{m}</span></li>
+        ))}
+        {!insights.gaps.length && !insights.risks.length && !insights.metrics.length && (
+          <li className="text-slate-400 text-sm">لا توجد إنسايتس بعد.</li>
+        )}
+      </ul>
+    </section>
+  </div>
+</aside>
+
 
       {/* ===== Chat column ===== */}
       <main className="col-span-6 bg-surface rounded-xl shadow flex flex-col relative text-foreground">
+        <header className="sticky top-0 z-10 bg-surface/80 backdrop-blur border-b border-line px-4 py-3 flex items-center gap-2">
+  {titleEditing ? (
+    <>
+      <input
+        className="flex-1 h-9 px-3 rounded-lg border border-line focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+        value={titleDraft}
+        onChange={(e) => setTitleDraft(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") saveThreadTitle();
+          if (e.key === "Escape") setTitleEditing(false);
+        }}
+        autoFocus
+        placeholder="اسم الثريد"
+      />
+      <button onClick={saveThreadTitle} className="px-3 h-9 rounded-lg bg-blue-600 text-white hover:bg-blue-700">
+        حفظ
+      </button>
+      <button onClick={() => setTitleEditing(false)} className="px-3 h-9 rounded-lg border">إلغاء</button>
+    </>
+  ) : (
+    <>
+      <h1 className="flex-1 font-semibold text-slate-800 text-lg truncate">
+        {activeThread?.title || "محادثة غير مسماة"}
+      </h1>
+      <div className="text-xs text-slate-500 me-2">
+        {(activeThread?.messages?.length ?? 0)} رسالة
+      </div>
+      <button
+        onClick={() => setTitleEditing(true)}
+        className="p-2 rounded-lg border hover:bg-slate-50"
+        title="إعادة تسمية الثريد"
+      >
+        <Edit3 className="w-4 h-4" />
+      </button>
+    </>
+  )}
+</header>
+
         {/* Messages */}
         <div
           ref={chatRef}
@@ -1721,7 +2118,7 @@ async function saveStory() {
           </AnimatePresence>
 
           <AnimatePresence initial={false}>
-            {messages.map((m) => (
+            {activeThread?.messages.map((m) => (
               <motion.div
                 key={m.id}
                 initial={{ opacity: 0, y: 6, scale: 0.98 }}
@@ -1846,16 +2243,7 @@ async function saveStory() {
         {showHelp && (
           <div className="px-3 pb-2 flex flex-wrap gap-2 items-center">
             <span className="text-xs text-slate-500">اختصار سريع:</span>
-            {helpCmds.map((c) => (
-              <button
-                key={c.insert}
-                onClick={() => setInput(c.insert)}
-                className="text-xs px-3 h-8 rounded-full border bg-white hover:bg-blue-50 text-slate-700"
-                title={c.insert}
-              >
-                {c.label}
-              </button>
-            ))}
+            
             <button
               onClick={() => setShowHelp(false)}
               className="ms-auto text-xs px-2 h-8 rounded border text-slate-500 hover:bg-slate-50"
@@ -1912,7 +2300,16 @@ async function saveStory() {
 
           <button
             className="px-3 h-10 rounded-lg border"
-            onClick={() => setMessages([])}
+            onClick={() => {
+              updateActiveThreadMessages(() => []); // امسح رسائل الثريد الحالي
+              setThreads((prev) =>
+                prev.map(
+                  (
+                    t // امسح الدرافت كمان
+                  ) => (t.id === activeThreadId ? { ...t, draft: "" } : t)
+                )
+              );
+            }}
             title="مسح الرسائل"
           >
             Clear
@@ -2115,107 +2512,155 @@ async function saveStory() {
           </div>
         </div>
 
-        {/* Status */}
-        <div className="text-xs text-slate-500">
-          <div>BRD: {status.hasBrd ? "✓ موجود" : "— غير موجود"}</div>
-          <div>Stories: {status.storyCount}</div>
-          {status.lastUploadedAt && (
-            <div>
-              آخر رفع: {new Date(status.lastUploadedAt).toLocaleString()}
-            </div>
-          )}
-        </div>
+{/* Status (pretty) */}
+<div className="grid grid-cols-3 gap-2 text-xs">
+  <div className={clsx(
+    "flex items-center gap-2 p-2 rounded-xl border",
+    status.hasBrd ? "bg-emerald-50 border-emerald-200 text-emerald-800" : "bg-slate-50 border-line text-slate-700"
+  )}>
+    <FileText className="w-4 h-4" />
+    <div className="leading-tight">
+      <div className="text-[11px] opacity-80">BRD</div>
+      <div className="font-semibold">{status.hasBrd ? "موجود" : "غير موجود"}</div>
+    </div>
+  </div>
+
+  <div className="flex items-center gap-2 p-2 rounded-xl border bg-sky-50 border-sky-200 text-sky-800">
+    <ListChecks className="w-4 h-4" />
+    <div className="leading-tight">
+      <div className="text-[11px] opacity-80">Stories</div>
+      <div className="font-semibold">{status.storyCount}</div>
+    </div>
+  </div>
+
+  <div className="flex items-center gap-2 p-2 rounded-xl border bg-violet-50 border-violet-200 text-violet-800"
+       title={status.lastUploadedAt ? new Date(status.lastUploadedAt).toLocaleString() : "لا يوجد"}>
+    <Clock3 className="w-4 h-4" />
+    <div className="leading-tight">
+      <div className="text-[11px] opacity-80">آخر رفع</div>
+      <div className="font-semibold">
+        {status.lastUploadedAt ? new Date(status.lastUploadedAt).toLocaleTimeString("ar", { hour: "2-digit", minute: "2-digit", hour12: true }) : "—"}
+      </div>
+    </div>
+  </div>
+</div>
+
 
         {/* Backlog */}
         <div className="h-px bg-slate-200" />
         <div>
-          <div className="flex items-center justify-between mb-2 gap-2">
-            <h3 className="font-semibold text-slate-700">Backlog</h3>
-            <div className="flex items-center gap-2">
-              <input
-                value={backlogQuery}
-                onChange={(e) => {
-                  setPage(1);
-                  setBacklogQuery(e.target.value);
-                }}
-                placeholder="بحث في الـStories..."
-                className="h-8 px-2 rounded border border-line focus:border-blue-400 focus:ring-2 focus:ring-blue-100 text-sm"
-              />
-              <button
-                onClick={() => {
-                  void refreshStories();
-                  toast.message("تم تحديث الـStories");
-                }}
-                className="text-xs text-blue-600 hover:underline"
-              >
-                تحديث
-              </button>
-            </div>
-          </div>
+<div className="space-y-2">
+  <div className="flex items-center gap-2">
+    <h3 className="font-semibold text-slate-700">Backlog</h3>
+
+    {/* عدّاد سريع */}
+    <span className="text-[11px] px-2 py-0.5 rounded-full border bg-slate-50 text-slate-700 border-line">
+      {filteredStories.length}/{stories.length}
+    </span>
+
+    <div className="ms-auto flex items-center gap-2">
+      {/* بحث */}
+      <div className="relative w-[220px]">
+        <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
+        <input
+          value={backlogQuery}
+          onChange={(e) => { setPage(1); setBacklogQuery(e.target.value); }}
+          placeholder="بحث في الـStories..."
+          className="h-8 w-full pl-8 pr-7 rounded border border-line focus:border-blue-400 focus:ring-2 focus:ring-blue-100 text-sm"
+        />
+        {backlogQuery && (
+          <button
+            onClick={() => { setBacklogQuery(""); setPage(1); }}
+            className="absolute right-1 top-1/2 -translate-y-1/2 p-1 rounded hover:bg-slate-100"
+            title="مسح البحث"
+          >
+            <X className="w-4 h-4 text-slate-500" />
+          </button>
+        )}
+      </div>
+
+      {/* فلتر بالتاج */}
+      <select
+        className="h-8 text-sm rounded border border-line bg-white px-2"
+        value={filterTag}
+        onChange={(e) => { setPage(1); setFilterTag(e.target.value as Tag | "All"); }}
+        title="فلتر بالتاج"
+      >
+        <option value="All">كل التاجز</option>
+        <option value="Critical">Critical</option>
+        <option value="Enhancement">Enhancement</option>
+        <option value="Blocked">Blocked</option>
+        <option value="None">None</option>
+      </select>
+
+      {/* فرز */}
+      <select
+        className="h-8 text-sm rounded border border-line bg-white px-2"
+        value={sortMode}
+        onChange={(e) => setSortMode(e.target.value as SortMode)}
+        title="ترتيب"
+      >
+        <option value="recent">الأحدث أولاً</option>
+        <option value="oldest">الأقدم أولاً</option>
+        <option value="az">العنوان A→Z</option>
+        <option value="za">العنوان Z→A</option>
+        <option value="with-ac">التي بها AC أولاً</option>
+      </select>
+
+      {/* تحديث */}
+      <button
+        onClick={() => { void refreshStories(); toast.message("تم تحديث الـStories"); }}
+        className="h-8 px-2 rounded border bg-white hover:bg-slate-50 text-slate-700 flex items-center gap-1"
+        title="تحديث"
+      >
+        <RefreshCw className="w-4 h-4" />
+        <span className="text-xs">تحديث</span>
+      </button>
+    </div>
+  </div>
+</div>
+
 
           <ul className="text-sm space-y-2 max-h-56 overflow-auto pe-1">
             {pagedStories.length ? (
               pagedStories.map((s) => (
-                <li
-                  key={s.id ?? s.title}
-                  className="p-2 border rounded-lg hover:bg-slate-50 cursor-pointer"
-                  onClick={() => openModal(s)}
-                  title="اضغط للتعديل أو الحذف"
-                >
-                  <div className="flex items-start justify-between gap-2">
-                    {/* يسار: تفاصيل الستوري */}
-                    <div>
-                      <div className="font-medium">{s.title}</div>
+<li
+  key={s.id ?? s.title}
+  className="group p-3 border rounded-xl bg-white hover:shadow-sm hover:bg-slate-50 cursor-pointer transition"
+  onClick={() => openModal(s)}
+  title="اضغط للتفاصيل"
+>
+  <div className="flex items-start justify-between gap-3">
+    <div className="min-w-0">
+      <div className="font-medium text-slate-800 truncate">{s.title}</div>
+      {s.description && (
+        <p className="text-slate-500 text-xs mt-1 line-clamp-2">{s.description}</p>
+      )}
+      <div className="flex items-center gap-2 mt-2">
+        <span className="text-[11px] px-2 py-0.5 rounded-full border bg-slate-50 text-slate-700">
+          AC: {Array.isArray(s.acceptance_criteria) ? s.acceptance_criteria.length : 0}
+        </span>
+        <span
+          className={clsx(
+            "text-[11px] px-2 py-0.5 rounded-full border",
+            tagColor(storyTags[s.id ?? s.title] ?? "None")
+          )}
+          onClick={(e) => e.stopPropagation()}
+        >
+          {storyTags[s.id ?? s.title] ?? "None"}
+        </span>
+      </div>
+    </div>
 
-                      {s.description && (
-                        <div className="text-slate-500 text-xs mt-1">
-                          {s.description}
-                        </div>
-                      )}
+    <button
+      className="opacity-0 group-hover:opacity-100 text-xs px-2 h-7 rounded border"
+      onClick={(e) => { e.stopPropagation(); openModal(s); }}
+    >
+      تفاصيل
+    </button>
+  </div>
+</li>
 
-                      {s.acceptance_criteria && (
-                        <div className="text-slate-500 text-xs mt-1">
-                          AC:{" "}
-                          {Array.isArray(s.acceptance_criteria)
-                            ? s.acceptance_criteria.join(", ")
-                            : s.acceptance_criteria}
-                        </div>
-                      )}
-
-                      {/* سطر التاج */}
-                      <div
-                        className="flex items-center gap-2 mt-2"
-                        onClick={(e) => e.stopPropagation()} // عشان متفتحش المودال
-                      >
-                        <span
-                          className={clsx(
-                            "text-[11px] border rounded-full px-2 py-0.5",
-                            tagColor(storyTags[s.id ?? s.title] ?? "None")
-                          )}
-                        >
-                          {storyTags[s.id ?? s.title] ?? "None"}
-                        </span>
-
-                        <select
-                          className="text-[11px] border rounded px-1.5 py-0.5 bg-white"
-                          value={storyTags[s.id ?? s.title] ?? "None"}
-                          onChange={(e) =>
-                            setTag(s.id ?? s.title, e.target.value as Tag)
-                          }
-                          title="Set tag"
-                        >
-                          <option>None</option>
-                          <option>Critical</option>
-                          <option>Enhancement</option>
-                          <option>Blocked</option>
-                        </select>
-                      </div>
-                    </div>
-
-                    {/* يمين: مؤشر بسيط */}
-                    <div className="opacity-50 text-xs">تفاصيل</div>
-                  </div>
-                </li>
               ))
             ) : (
               <li className="text-slate-400">لا توجد Stories بعد.</li>
@@ -2455,10 +2900,13 @@ async function saveStory() {
               <div className="text-xs text-slate-500">التخزين المحلي</div>
               <button
                 onClick={() => {
-                  localStorage.removeItem(LS_KEYS.messages);
+                  localStorage.removeItem(LS_KEYS.threads);
+                  localStorage.removeItem(LS_KEYS.activeThreadId);
+
                   localStorage.removeItem(LS_KEYS.stories);
                   localStorage.removeItem(LS_KEYS.insights);
-                  setMessages([]);
+                  setThreads([]); // فضّي كل الثريدات
+                  setActiveThreadId(null); // مفيش ثريد نشط
                   setStories([]);
                   setInsights({ gaps: [], risks: [], metrics: [] });
 
@@ -2473,151 +2921,176 @@ async function saveStory() {
         </div>
       )}
       {/* ===== Story Edit/Delete Modal ===== */}
-{/* ===== Story View/Edit Modal ===== */}
-{open && selectedStory && (
-  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={closeModal}>
-    <motion.div
-      initial={{ opacity: 0, y: 10 }}
-      animate={{ opacity: 1, y: 0 }}
-      className="bg-surface rounded-2xl shadow-xl ring-1 ring-line w-[min(640px,94vw)] p-5"
-      onClick={(e) => e.stopPropagation()}
-    >
-      <div className="flex items-center justify-between mb-3">
-        <h4 className="text-lg font-semibold">تفاصيل User Story</h4>
-        <button onClick={closeModal} className="text-slate-500 hover:text-slate-700" title="إغلاق">✕</button>
-      </div>
+      {/* ===== Story View/Edit Modal ===== */}
+      {open && selectedStory && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+          onClick={closeModal}
+        >
+          <motion.div
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="bg-surface rounded-2xl shadow-xl ring-1 ring-line w-[min(640px,94vw)] p-5"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between mb-3">
+              <h4 className="text-lg font-semibold">تفاصيل User Story</h4>
+              <button
+                onClick={closeModal}
+                className="text-slate-500 hover:text-slate-700"
+                title="إغلاق"
+              >
+                ✕
+              </button>
+            </div>
 
-      {/* وضع العرض */}
-      {!editMode && (
-        <div className="space-y-3">
-          <div>
-            <div className="text-xs text-slate-500 mb-1">العنوان</div>
-            <div className="font-medium text-slate-800">{selectedStory.title || "-"}</div>
-          </div>
-          <div>
-            <div className="text-xs text-slate-500 mb-1">الوصف</div>
-            <div className="text-slate-700 whitespace-pre-wrap">{selectedStory.description || "-"}</div>
-          </div>
-          <div>
-            <div className="text-xs text-slate-500 mb-1">معايير القبول</div>
-            {Array.isArray(selectedStory.acceptance_criteria) && selectedStory.acceptance_criteria.length ? (
-              <ul className="list-disc ms-5 text-slate-700 space-y-1">
-                {selectedStory.acceptance_criteria.map((ac, i) => <li key={i}>{ac}</li>)}
-              </ul>
-            ) : (
-              <div className="text-slate-400">لا يوجد</div>
+            {/* وضع العرض */}
+            {!editMode && (
+              <div className="space-y-3">
+                <div>
+                  <div className="text-xs text-slate-500 mb-1">العنوان</div>
+                  <div className="font-medium text-slate-800">
+                    {selectedStory.title || "-"}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-xs text-slate-500 mb-1">الوصف</div>
+                  <div className="text-slate-700 whitespace-pre-wrap">
+                    {selectedStory.description || "-"}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-xs text-slate-500 mb-1">
+                    معايير القبول
+                  </div>
+                  {Array.isArray(selectedStory.acceptance_criteria) &&
+                  selectedStory.acceptance_criteria.length ? (
+                    <ul className="list-disc ms-5 text-slate-700 space-y-1">
+                      {selectedStory.acceptance_criteria.map((ac, i) => (
+                        <li key={i}>{ac}</li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <div className="text-slate-400">لا يوجد</div>
+                  )}
+                </div>
+
+                <div className="flex items-center justify-between gap-2 mt-4">
+                  <button
+                    onClick={async () => {
+                      if (confirm("هل تريد حذف هذه الستوري نهائيًا؟")) {
+                        await hardDeleteStory();
+                      }
+                    }}
+                    className="px-3 h-10 rounded-lg border text-red-600 border-red-200 hover:bg-red-50"
+                    title="حذف نهائي"
+                  >
+                    حذف
+                  </button>
+
+                  <div className="ms-auto flex items-center gap-2">
+                    <button
+                      onClick={() => setEditMode(true)}
+                      className="px-4 h-10 rounded-lg border hover:bg-slate-50"
+                    >
+                      تعديل
+                    </button>
+                    <button
+                      onClick={closeModal}
+                      className="px-3 h-10 rounded-lg border"
+                    >
+                      إغلاق
+                    </button>
+                  </div>
+                </div>
+              </div>
             )}
-          </div>
 
-          <div className="flex items-center justify-between gap-2 mt-4">
-            <button
-              onClick={async () => {
-                if (confirm("هل تريد حذف هذه الستوري نهائيًا؟")) {
-                  await hardDeleteStory();
-                }
-              }}
-              className="px-3 h-10 rounded-lg border text-red-600 border-red-200 hover:bg-red-50"
-              title="حذف نهائي"
-            >
-              حذف
-            </button>
+            {/* وضع التعديل */}
+            {editMode && (
+              <div className="space-y-3">
+                <div>
+                  <label className="block text-sm mb-1">العنوان</label>
+                  <input
+                    className="w-full border border-line focus:border-blue-400 focus:ring-2 focus:ring-blue-100 rounded-lg h-10 px-3 text-slate-900"
+                    value={formTitle}
+                    onChange={(e) => setFormTitle(e.target.value)}
+                    placeholder="عنوان الستوري"
+                  />
+                </div>
 
-            <div className="ms-auto flex items-center gap-2">
-              <button onClick={() => setEditMode(true)} className="px-4 h-10 rounded-lg border hover:bg-slate-50">
-                تعديل
-              </button>
-              <button onClick={closeModal} className="px-3 h-10 rounded-lg border">
-                إغلاق
-              </button>
-            </div>
-          </div>
+                <div>
+                  <label className="block text-sm mb-1">الوصف</label>
+                  <textarea
+                    className="w-full border border-line focus:border-blue-400 focus:ring-2 focus:ring-blue-100 rounded-lg p-2 min-h-[90px] text-slate-900"
+                    value={formDesc}
+                    onChange={(e) => setFormDesc(e.target.value)}
+                    placeholder="وصف مختصر للستوري…"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm mb-1">
+                    معايير القبول (كل سطر = معيار)
+                  </label>
+                  <textarea
+                    className="w-full border border-line focus:border-blue-400 focus:ring-2 focus:ring-blue-100 rounded-lg p-2 min-h-[120px] text-slate-900"
+                    value={formAC}
+                    onChange={(e) => setFormAC(e.target.value)}
+                    placeholder={"- يجب أن...\n- عند ... يحدث ..."}
+                  />
+                </div>
+
+                <div className="flex items-center justify-between gap-2 mt-4">
+                  <button
+                    onClick={async () => {
+                      if (confirm("هل تريد حذف هذه الستوري نهائيًا؟")) {
+                        await hardDeleteStory();
+                      }
+                    }}
+                    className="px-3 h-10 rounded-lg border text-red-600 border-red-200 hover:bg-red-50"
+                    title="حذف نهائي"
+                  >
+                    حذف
+                  </button>
+
+                  <div className="ms-auto flex items-center gap-2">
+                    <button
+                      onClick={() => {
+                        // رجوع بدون حفظ
+                        setEditMode(false);
+                        // رجّع الفورم لقيم الستوري الحالية
+                        setFormTitle(selectedStory?.title ?? "");
+                        setFormDesc(selectedStory?.description ?? "");
+                        setFormAC(
+                          Array.isArray(selectedStory?.acceptance_criteria)
+                            ? selectedStory!.acceptance_criteria!.join("\n")
+                            : selectedStory?.acceptance_criteria ?? ""
+                        );
+                      }}
+                      className="px-3 h-10 rounded-lg border"
+                    >
+                      إلغاء
+                    </button>
+                    <button
+                      onClick={saveStory}
+                      disabled={saving}
+                      className={clsx(
+                        "px-4 h-10 rounded-lg text-white",
+                        savedTick ? "bg-emerald-600" : "bg-blue-600",
+                        !saving && "hover:bg-blue-700",
+                        saving && "opacity-70 cursor-not-allowed"
+                      )}
+                    >
+                      {saving ? "جارٍ الحفظ…" : savedTick ? "تم" : "حفظ"}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+          </motion.div>
         </div>
       )}
-
-      {/* وضع التعديل */}
-      {editMode && (
-        <div className="space-y-3">
-          <div>
-            <label className="block text-sm mb-1">العنوان</label>
-            <input
-              className="w-full border border-line focus:border-blue-400 focus:ring-2 focus:ring-blue-100 rounded-lg h-10 px-3 text-slate-900"
-              value={formTitle}
-              onChange={(e) => setFormTitle(e.target.value)}
-              placeholder="عنوان الستوري"
-            />
-          </div>
-
-          <div>
-            <label className="block text-sm mb-1">الوصف</label>
-            <textarea
-              className="w-full border border-line focus:border-blue-400 focus:ring-2 focus:ring-blue-100 rounded-lg p-2 min-h-[90px] text-slate-900"
-              value={formDesc}
-              onChange={(e) => setFormDesc(e.target.value)}
-              placeholder="وصف مختصر للستوري…"
-            />
-          </div>
-
-          <div>
-            <label className="block text-sm mb-1">معايير القبول (كل سطر = معيار)</label>
-            <textarea
-              className="w-full border border-line focus:border-blue-400 focus:ring-2 focus:ring-blue-100 rounded-lg p-2 min-h-[120px] text-slate-900"
-              value={formAC}
-              onChange={(e) => setFormAC(e.target.value)}
-              placeholder={"- يجب أن...\n- عند ... يحدث ..."}
-            />
-          </div>
-
-          <div className="flex items-center justify-between gap-2 mt-4">
-            <button
-              onClick={async () => {
-                if (confirm("هل تريد حذف هذه الستوري نهائيًا؟")) {
-                  await hardDeleteStory();
-                }
-              }}
-              className="px-3 h-10 rounded-lg border text-red-600 border-red-200 hover:bg-red-50"
-              title="حذف نهائي"
-            >
-              حذف
-            </button>
-
-            <div className="ms-auto flex items-center gap-2">
-              <button
-                onClick={() => {
-                  // رجوع بدون حفظ
-                  setEditMode(false);
-                  // رجّع الفورم لقيم الستوري الحالية
-                  setFormTitle(selectedStory?.title ?? "");
-                  setFormDesc(selectedStory?.description ?? "");
-                  setFormAC(
-                    Array.isArray(selectedStory?.acceptance_criteria)
-                      ? selectedStory!.acceptance_criteria!.join("\n")
-                      : selectedStory?.acceptance_criteria ?? ""
-                  );
-                }}
-                className="px-3 h-10 rounded-lg border"
-              >
-                إلغاء
-              </button>
-              <button
-                onClick={saveStory}
-                disabled={saving}
-                className={clsx(
-                  "px-4 h-10 rounded-lg text-white",
-                  savedTick ? "bg-emerald-600" : "bg-blue-600",
-                  !saving && "hover:bg-blue-700",
-                  saving && "opacity-70 cursor-not-allowed"
-                )}
-              >
-                {saving ? "جارٍ الحفظ…" : savedTick ? "تم" : "حفظ"}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-    </motion.div>
-  </div>
-)}
-
 
       {/* Flowchart Modal */}
       {showFlowchart && (
@@ -2727,20 +3200,4 @@ function MermaidChart({ stories }: { stories: Story[] }) {
       style={{ minHeight: 300, maxHeight: 500 }}
     />
   );
-}
-
-// Component
-function cleanMermaidCode(code: string): string {
-  // احذف أي ```mermaid أو ``` أو نص خارج الرسم
-  let cleaned = code.trim();
-  // احذف بداية ونهاية البلوك
-  cleaned = cleaned.replace(/^```mermaid\s*/i, "");
-  cleaned = cleaned.replace(/^```/, "");
-  cleaned = cleaned.replace(/```$/i, "");
-  // احذف أي نص قبل graph أو بعد نهاية الرسم
-  const graphIdx = cleaned.indexOf("graph");
-  if (graphIdx !== -1) {
-    cleaned = cleaned.slice(graphIdx);
-  }
-  return cleaned.trim();
 }
