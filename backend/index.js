@@ -7,6 +7,7 @@
 // -------------------- Imports --------------------
 // ===== Helpers: التقاط JSON من ردّ الموديل ثم استخراج القصص =====
 // ---------- App ----------
+const ADO_API_VERSIONS = ['6.1-preview', '6.0'];
 const app = express();
 app.use( cors( { origin: 'http://localhost:3000' } ) );
 app.use( bodyParser.json( { limit: '5mb' } ) );
@@ -16,7 +17,7 @@ app.use( cors( {
   origin: 'http://localhost:3000',
   credentials: true,
   methods: [ 'GET', 'POST', 'PUT', 'DELETE', 'OPTIONS' ],
-  allowedHeaders: [ 'Content-Type', 'x-api-key', 'x-model', 'x-lang' ],
+  allowedHeaders: [ 'Content-Type', 'x-api-key', 'x-model', 'x-lang' , 'x-ado-org','x-ado-pat','x-ado-project', 'x-ado-base'],
 } ) );
 app.options( '*', cors() );
 
@@ -258,6 +259,21 @@ app.post( '/stories/generate/from-upload', async ( req, res ) => {
   }
 } );
 
+// ===== API version fallback helpers =====
+const addApi = (path, v) => `${path}${path.includes('?') ? '&' : '?'}api-version=${v}`;
+
+// جرّب 6.1-preview ثم 6.0 تلقائيًا
+async function adoFetchWithApi(base, path, opts) {
+  let lastErr;
+  for (const v of ADO_API_VERSIONS) {
+    try {
+      return await adoFetch(`${base}${addApi(path, v)}`, opts);
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  throw lastErr;
+}
 
 // Route
 app.post( '/upload', upload.single( 'file' ), async ( req, res ) => {
@@ -872,3 +888,242 @@ const PORT = process.env.PORT || 5000;
 app.listen( PORT, () => {
   console.log( `BRD backend listening on http://localhost:${ PORT }` );
 } );
+/* ---------------- Azure DevOps (ADO) Integration --------------- */
+/** كل النداءات بتقرأ org/pat/project من الهيدرز:
+ *  x-ado-org, x-ado-pat, x-ado-project
+ */
+// =============== ADO Integration (fixed) ===============
+
+// ------- helpers -------
+const ADO = {
+  baseUrl: (baseOrOrg) => {
+    if (!baseOrOrg) return '';
+    if (/^https?:\/\//i.test(baseOrOrg)) return String(baseOrOrg).replace(/\/+$/,'');
+    return `https://dev.azure.com/${baseOrOrg}`;
+  },
+  auth:  (pat) => ({ Authorization: 'Basic ' + Buffer.from(':' + pat).toString('base64') }),
+  json:  { 'Content-Type': 'application/json' },
+  patch: { 'Content-Type': 'application/json-patch+json' },
+};
+
+function resolveBase(req) {
+  const baseHdr = String(req.header('x-ado-base') || req.header('x-ado-org') || '').trim();
+  const coll    = String(req.header('x-ado-collection') || '').trim().replace(/^\/+|\/+$/g,'');
+  if (!baseHdr) return '';
+  let base = ADO.baseUrl(baseHdr);     // https://azure.2p.com.sa أو https://dev.azure.com/<org>
+  if (coll) base = `${base}/${coll}`;  // …/Projects أو …/DefaultCollection
+  return base.replace(/\/+$/,'');
+}
+
+async function adoFetch(url, { pat, method='GET', headers={}, body } = {}) {
+  const r = await fetch(url, { method, headers: { ...headers, ...ADO.auth(pat) }, body });
+  const text = await r.text();
+  let json; try { json = JSON.parse(text); } catch {}
+  if (!r.ok) throw Object.assign(new Error(json?.message || text || `HTTP ${r.status}`), { status: r.status, json, urlTried: url });
+  return json ?? {};
+}
+
+
+// WIQL + جلب العناصر
+ async function wiql({ base, project, pat, query, expand = 'Relations' }) {
+   const proj = encodeURIComponent(project);
+   const data = await adoFetchWithApi(
+     base,
+     `/${proj}/_apis/wit/wiql`,
+     { pat, method: 'POST', headers: ADO.json, body: JSON.stringify({ query }) }
+   );
+   const ids = (data.workItems || []).map(w => w.id);
+   if (!ids.length) return [];
+   const items = await adoFetchWithApi(
+     base,
+     `/_apis/wit/workitems?ids=${ids.join(',')}&$expand=${encodeURIComponent(expand)}`,
+     { pat }
+   );
+   return items.value || [];
+ }
+
+// إنشاء Work Item
+async function createWorkItem({ base, project, pat, type, patch }) {
+   const proj = encodeURIComponent(project);
+   return adoFetchWithApi(
+     base,
+     `/${proj}/_apis/wit/workitems/$${encodeURIComponent(type)}`,
+     { pat, method: 'POST', headers: ADO.patch, body: JSON.stringify(patch) }
+   );
+ }
+
+/* --------- 1) المشاريع --------- */
+app.get('/ado/projects', async (req, res) => {
+  try {
+    const pat  = String(req.header('x-ado-pat') || '');
+    const base = resolveBase(req);
+    
+    if (!pat || !base) return res.status(400).json({ error: 'base + pat required' });
+
+    const data = await adoFetchWithApi(base, '/_apis/projects', { pat });
+    res.json((data.value || []).map(p => ({ id: p.id, name: p.name })));
+  } catch (e) {
+    res.status(e.status || 500).json({ error: e.message || 'projects failed' });
+  }
+});
+
+/* --------- 2) عرض Epics --------- */
+app.get('/ado/epics', async (req, res) => {
+  try {
+    const pat     = String(req.header('x-ado-pat') || '');
+    const project = String(req.header('x-ado-project') || '');
+    const base    = resolveBase(req);
+    if (!pat || !base || !project) return res.status(400).json({ error: 'base/pat/project required' });
+
+    const items = await wiql({
+      base, project, pat,
+      query:
+        `SELECT [System.Id] FROM WorkItems ` +
+        `WHERE [System.TeamProject] = '${project}' AND [System.WorkItemType] = 'Epic' ` +
+        `ORDER BY [System.ChangedDate] DESC`,
+    });
+
+    res.json(items.map((w) => ({ id: w.id, title: w.fields?.['System.Title'] })));
+  } catch (e) {
+    res.status(e.status || 500).json({ error: e.message || 'epics failed' });
+  }
+});
+
+/* --------- 3) إنشاء Epic --------- */
+app.post('/ado/epics', async (req, res) => {
+  try {
+    const pat     = String(req.header('x-ado-pat') || '');
+    const project = String(req.header('x-ado-project') || '');
+    const base    = resolveBase(req);
+    const { title, description, tags } = req.body || {};
+    if (!pat || !base || !project || !title) return res.status(400).json({ error: 'missing fields' });
+
+    const patch = [
+      { op: 'add', path: '/fields/System.Title', value: title },
+      description ? { op: 'add', path: '/fields/System.Description', value: description } : null,
+      tags?.length ? { op: 'add', path: '/fields/System.Tags', value: tags.join('; ') } : null,
+    ].filter(Boolean);
+
+    const w = await createWorkItem({ base, project, pat, type: 'Epic', patch });
+    res.json({ id: w.id, title: w.fields?.['System.Title'] });
+  } catch (e) {
+    res.status(e.status || 500).json({ error: e.message || 'create epic failed' });
+  }
+});
+
+/* --------- 4) عرض Features (اختياريًا مفلترة بالـ Epic) --------- */
+app.get('/ado/features', async (req, res) => {
+  try {
+    const pat     = String(req.header('x-ado-pat') || '');
+    const project = String(req.header('x-ado-project') || '');
+    const base    = resolveBase(req);
+    const epicId  = Number(req.query.epicId || 0);
+    if (!pat || !base || !project) return res.status(400).json({ error: 'base/pat/project required' });
+
+    const items = await wiql({
+      base, project, pat,
+      query:
+        `SELECT [System.Id] FROM WorkItems ` +
+        `WHERE [System.TeamProject] = '${project}' AND [System.WorkItemType] = 'Feature' ` +
+        `ORDER BY [System.ChangedDate] DESC`,
+    });
+
+    let list = items.map((w) => ({
+      id: w.id,
+      title: w.fields?.['System.Title'],
+      parentUrl: (w.relations || []).find((r) => r.rel === 'System.LinkTypes.Hierarchy-Reverse')?.url || null,
+    }));
+
+    if (epicId) {
+      const epicUrl = `${base}/_apis/wit/workItems/${epicId}`;
+      list = list.filter((f) => f.parentUrl && f.parentUrl.includes(epicUrl));
+    }
+    res.json(list);
+  } catch (e) {
+    res.status(e.status || 500).json({ error: e.message || 'features failed' });
+  }
+});
+
+/* --------- 5) إنشاء Feature (مع ربط Parent = Epic) --------- */
+app.post('/ado/features', async (req, res) => {
+  try {
+    const pat     = String(req.header('x-ado-pat') || '');
+    const project = String(req.header('x-ado-project') || '');
+    const base    = resolveBase(req);
+    const { title, description, epicId, tags } = req.body || {};
+    if (!pat || !base || !project || !title) return res.status(400).json({ error: 'missing fields' });
+
+    const patch = [
+      { op: 'add', path: '/fields/System.Title', value: title },
+      description ? { op: 'add', path: '/fields/System.Description', value: description } : null,
+      tags?.length ? { op: 'add', path: '/fields/System.Tags', value: tags.join('; ') } : null,
+      epicId ? {
+        op: 'add',
+        path: '/relations/-',
+        value: {
+          rel: 'System.LinkTypes.Hierarchy-Reverse',
+          url: `${base}/_apis/wit/workItems/${epicId}`,
+          attributes: { name: 'Parent' },
+        },
+      } : null,
+    ].filter(Boolean);
+
+    const w = await createWorkItem({ base, project, pat, type: 'Feature', patch });
+    res.json({ id: w.id, title: w.fields?.['System.Title'] });
+  } catch (e) {
+    res.status(e.status || 500).json({ error: e.message || 'create feature failed' });
+  }
+});
+
+/* --------- 6) Bulk: إنشاء User Stories تحت Feature --------- */
+app.post('/ado/stories/bulk', async (req, res) => {
+  try {
+    const pat      = String(req.header('x-ado-pat') || '');
+    const project  = String(req.header('x-ado-project') || '');
+    const base     = resolveBase(req);
+    const { featureId, stories } = req.body || {};
+    if (!pat || !base || !project || !featureId) return res.status(400).json({ error: 'missing fields' });
+    if (!Array.isArray(stories) || !stories.length) return res.status(400).json({ error: 'stories required' });
+
+    const results = [];
+    for (const s of stories) {
+      const htmlDesc =
+        `<p>${String(s.description || '').replace(/\n/g, '<br/>')}</p>` +
+        (Array.isArray(s.acceptance_criteria) && s.acceptance_criteria.length
+          ? `<p><strong>Acceptance Criteria</strong></p><ul>${
+              s.acceptance_criteria.map((x) => `<li>${x}</li>`).join('')
+            }</ul>`
+          : '');
+
+      const patch = [
+        { op: 'add', path: '/fields/System.Title',       value: String(s.title || '').slice(0, 250) },
+        { op: 'add', path: '/fields/System.Description', value: htmlDesc },
+        { op: 'add', path: '/relations/-', value: {
+            rel: 'System.LinkTypes.Hierarchy-Reverse',
+            url: `${base}/_apis/wit/workItems/${featureId}`,
+            attributes: { name: 'Parent' },
+        }},
+        s.tags?.length ? { op: 'add', path: '/fields/System.Tags', value: s.tags.join('; ') } : null,
+      ].filter(Boolean);
+
+      let wi;
+      try {
+        wi = await createWorkItem({ base, project, pat, type: 'User Story',            patch });
+      } catch {
+        wi = await createWorkItem({ base, project, pat, type: 'Product Backlog Item',  patch });
+      }
+
+      results.push({
+        id: wi.id,
+        title: wi.fields?.['System.Title'],
+        url: `${base}/${encodeURIComponent(project)}/_workitems/edit/${wi.id}`,
+      });
+    }
+
+    res.json({ ok: true, created: results });
+  } catch (e) {
+    res.status(e.status || 500).json({ error: e.message || 'push stories failed' });
+  }
+});
+
+// =============== End ADO Integration (fixed) ===============

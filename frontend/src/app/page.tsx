@@ -106,7 +106,8 @@ import {
   RefreshCw,
   Search,
   X,
-  AlertTriangle, Activity ,
+  AlertTriangle,
+  Activity,
   Download,
   Lightbulb,
   Moon,
@@ -320,7 +321,15 @@ export default function Home() {
 
   const [threads, setThreads] = useState<Thread[]>([]);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
-
+  // ===== ADO Settings =====
+  const [adoOrg, setAdoOrg] = useState<string>("");
+  const [adoPat, setAdoPat] = useState<string>(""); // سري
+  const [adoProject, setAdoProject] = useState<string>(""); // اسم أو ID
+  const [adoProjects, setAdoProjects] = useState<
+    Array<{ id: string; name: string }>
+  >([]);
+  const [adoBusy, setAdoBusy] = useState(false);
+  const isAdoConnected = !!adoOrg && !!adoPat; // مشروع اختياري لحد ما تختاره
   // helper لقراءة الثريد الحالي
   const activeThread = useMemo(
     () => threads.find((t) => t.id === activeThreadId) || null,
@@ -449,7 +458,9 @@ export default function Home() {
   useEffect(() => {
     persistDraft(input);
   }, [input, persistDraft]);
-
+  // ===== Azure DevOps Settings =====
+  const [adoBase, setAdoBase] = useState(""); // مثال: https://azure.2p.com.sa
+  const [adoCollection, setAdoCollection] = useState(""); // اختياري: DefaultCollection/Projects أو فاضي
   const [sendLoading, setSendLoading] = useState(false);
   const [opLoading, setOpLoading] = useState(false);
   const [patchLoading, setPatchLoading] = useState(false);
@@ -892,7 +903,14 @@ export default function Home() {
       });
     }
   }, [activeThread?.messages]);
-
+useEffect(() => {
+  if (typeof window === "undefined") return;
+  setAdoBase(localStorage.getItem("ado_base") || "");
+  setAdoCollection(localStorage.getItem("ado_collection") || "");
+  setAdoOrg(localStorage.getItem("ado_org") || "");
+  setAdoProject(localStorage.getItem("ado_project") || "");
+  setAdoPat(sessionStorage.getItem("ado_pat") || "");
+}, []);
   useEffect(() => {
     if (typeof window !== "undefined") {
       const sKey = localStorage.getItem("brd_api_key") || "";
@@ -1902,6 +1920,36 @@ export default function Home() {
       </div>
     );
   }
+function saveAdoSettings() {
+  localStorage.setItem("ado_base", adoBase.trim());
+  localStorage.setItem("ado_collection", adoCollection.trim());
+  localStorage.setItem("ado_org", adoOrg.trim());
+  localStorage.setItem("ado_project", adoProject.trim());
+  if (adoPat) sessionStorage.setItem("ado_pat", adoPat); // PAT في sessionStorage
+  toast.success("تم حفظ إعدادات Azure DevOps");
+}
+
+function disconnectAdo() {
+  localStorage.removeItem("ado_base");
+  localStorage.removeItem("ado_collection");
+  localStorage.removeItem("ado_org");
+  localStorage.removeItem("ado_project");
+  sessionStorage.removeItem("ado_pat");
+  setAdoBase(""); setAdoCollection(""); setAdoOrg(""); setAdoProject(""); setAdoPat("");
+  setAdoProjects([]);
+  toast.info("تم فصل Azure DevOps");
+}
+
+function adoHeaders(extra = {}) {
+  return getHeaders({
+    "x-ado-base": adoBase,
+    "x-ado-collection": adoCollection,
+    "x-ado-pat": adoPat,
+    "x-ado-project": adoProject,
+    ...extra, // ← دي مهمة
+  });
+}
+
 
   const ActionButton = ({
     icon,
@@ -2181,83 +2229,96 @@ export default function Home() {
           </section>
 
           {/* Insights card */}
-          
+
           <section className="bg-surface rounded-xl shadow p-4 border border-line">
-  {/* Header */}
-  <div className="flex items-center justify-between">
-    <h3 className="font-semibold text-slate-700">Insights</h3>
-    <button
-      onClick={() => {
-        void refreshInsights();
-        toast.info("تم تحديث Insights");
-      }}
-      className="text-xs text-blue-600 hover:underline"
-    >
-      تحديث
-    </button>
-  </div>
+            {/* Header */}
+            <div className="flex items-center justify-between">
+              <h3 className="font-semibold text-slate-700">Insights</h3>
+              <button
+                onClick={() => {
+                  void refreshInsights();
+                  toast.info("تم تحديث Insights");
+                }}
+                className="text-xs text-blue-600 hover:underline"
+              >
+                تحديث
+              </button>
+            </div>
 
-  {/* Sections */}
-  <div className="mt-3 space-y-3">
-    {/* helper: row */}
-    {([
-      {
-        key: "gaps",
-        title: "Gaps",
-        color: "text-amber-600",
-        bullet: "•",
-        items: insights.gaps as string[],
-      },
-      {
-        key: "risks",
-        title: "Risks",
-        color: "text-red-600",
-        bullet: "⚠️",
-        items: insights.risks as string[],
-      },
-      {
-        key: "metrics",
-        title: "Metrics",
-        color: "text-sky-700",
-        bullet: "📊",
-        items: insights.metrics as string[],
-      },
-    ] as const).map((sec) => (
-      <details key={sec.key} className="rounded-lg border border-line overflow-hidden group">
-        <summary className="cursor-pointer list-none px-3 py-2 bg-muted/50 hover:bg-muted flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <span className={sec.color}>{sec.title}</span>
-            <span className="text-xs rounded-full px-2 py-0.5 border bg-white/70">
-              {sec.items?.length ?? 0}
-            </span>
-          </div>
-          <span className="text-slate-500 text-xs group-open:rotate-180 transition-transform">⌄</span>
-        </summary>
+            {/* Sections */}
+            <div className="mt-3 space-y-3">
+              {/* helper: row */}
+              {(
+                [
+                  {
+                    key: "gaps",
+                    title: "Gaps",
+                    color: "text-amber-600",
+                    bullet: "•",
+                    items: insights.gaps as string[],
+                  },
+                  {
+                    key: "risks",
+                    title: "Risks",
+                    color: "text-red-600",
+                    bullet: "⚠️",
+                    items: insights.risks as string[],
+                  },
+                  {
+                    key: "metrics",
+                    title: "Metrics",
+                    color: "text-sky-700",
+                    bullet: "📊",
+                    items: insights.metrics as string[],
+                  },
+                ] as const
+              ).map((sec) => (
+                <details
+                  key={sec.key}
+                  className="rounded-lg border border-line overflow-hidden group"
+                >
+                  <summary className="cursor-pointer list-none px-3 py-2 bg-muted/50 hover:bg-muted flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <span className={sec.color}>{sec.title}</span>
+                      <span className="text-xs rounded-full px-2 py-0.5 border bg-white/70">
+                        {sec.items?.length ?? 0}
+                      </span>
+                    </div>
+                    <span className="text-slate-500 text-xs group-open:rotate-180 transition-transform">
+                      ⌄
+                    </span>
+                  </summary>
 
-        {sec.items?.length ? (
-          <ul className="text-sm space-y-2 pe-2 py-2 max-h-[26vh] overflow-y-auto">
-            {sec.items.map((t, i) => (
-              <li key={i} className={`flex items-start gap-2 leading-6 ${sec.color}`}>
-                <span className="mt-0.5">{sec.bullet}</span>
-                <span className="text-slate-800">{t}</span>
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <div className="px-3 py-3 text-sm text-slate-400">لا يوجد عناصر.</div>
-        )}
-      </details>
-    ))}
+                  {sec.items?.length ? (
+                    <ul className="text-sm space-y-2 pe-2 py-2 max-h-[26vh] overflow-y-auto">
+                      {sec.items.map((t, i) => (
+                        <li
+                          key={i}
+                          className={`flex items-start gap-2 leading-6 ${sec.color}`}
+                        >
+                          <span className="mt-0.5">{sec.bullet}</span>
+                          <span className="text-slate-800">{t}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <div className="px-3 py-3 text-sm text-slate-400">
+                      لا يوجد عناصر.
+                    </div>
+                  )}
+                </details>
+              ))}
 
-    {/* Empty state الكل فاضي */}
-    {!insights.gaps.length && !insights.risks.length && !insights.metrics.length && (
-      <div className="text-slate-400 text-sm px-2 py-4 text-center">
-        لا توجد إنسايتس بعد.
-      </div>
-    )}
-  </div>
-</section>
-
+              {/* Empty state الكل فاضي */}
+              {!insights.gaps.length &&
+                !insights.risks.length &&
+                !insights.metrics.length && (
+                  <div className="text-slate-400 text-sm px-2 py-4 text-center">
+                    لا توجد إنسايتس بعد.
+                  </div>
+                )}
+            </div>
+          </section>
         </div>
       </aside>
 
@@ -3126,6 +3187,108 @@ export default function Home() {
               onChange={(e) => setApiKey(e.target.value)}
               placeholder="sk-..."
             />
+
+            {/* اعدادات Azure ui */}
+            <section className="mt-4 p-3 rounded-lg border">
+  <div className="flex items-center justify-between mb-2">
+    <h4 className="font-semibold">Azure DevOps</h4>
+    {(adoBase && adoPat) ? (
+      <span className="badge badge--ok">Connected?</span>
+    ) : (
+      <span className="badge badge--warn">Not connected</span>
+    )}
+  </div>
+
+  <div className="grid gap-3 sm:grid-cols-2">
+    <div>
+      <label className="block text-sm mb-1">Base URL</label>
+      <input
+        className="w-full border border-line rounded-lg h-10 px-3"
+        placeholder="https://azure.2p.com.sa"
+        value={adoBase}
+        onChange={(e) => setAdoBase(e.target.value)}
+      />
+      <p className="text-xs text-slate-500 mt-1">مثال: https://azure.2p.com.sa</p>
+    </div>
+
+    <div>
+      <label className="block text-sm mb-1">Collection (اختياري)</label>
+      <input
+        className="w-full border border-line rounded-lg h-10 px-3"
+        placeholder="Projects / DefaultCollection"
+        value={adoCollection}
+        onChange={(e) => setAdoCollection(e.target.value)}
+      />
+    </div>
+
+    <div>
+      <label className="block text-sm mb-1">Organization (لو dev.azure.com)</label>
+      <input
+        className="w-full border border-line rounded-lg h-10 px-3"
+        placeholder="example-org"
+        value={adoOrg}
+        onChange={(e) => setAdoOrg(e.target.value)}
+      />
+    </div>
+
+    <div>
+      <label className="block text-sm mb-1">Personal Access Token (PAT)</label>
+      <input
+        type="password"
+        className="w-full border border-line rounded-lg h-10 px-3"
+        placeholder="••••••••••••"
+        value={adoPat}
+        onChange={(e) => setAdoPat(e.target.value)}
+      />
+      <p className="text-xs text-slate-500 mt-1">يُحفظ في <b>sessionStorage</b> فقط.</p>
+    </div>
+
+    <div className="sm:col-span-2">
+      <div className="flex items-center gap-2">
+        <button
+          className="btn btn-ghost"
+          disabled={adoBusy || !adoBase || !adoPat}
+          onClick={async () => {
+            try {
+              setAdoBusy(true);
+              const r = await fetch(getApiBase() + "/ado/projects", { headers: adoHeaders() });
+              if (!r.ok) throw new Error(`HTTP ${r.status}`);
+              const data = await r.json();
+              setAdoProjects(data);
+              toast.success("تم الاتصال وجلب المشاريع");
+            } catch (e) {
+              toast.error("فشل الاتصال — جرّب تعبئة Collection أيضًا");
+            } finally {
+              setAdoBusy(false);
+            }
+          }}
+        >
+          اختبار الاتصال وجلب المشاريع
+        </button>
+
+        <button className="btn btn-primary ms-auto" onClick={saveAdoSettings}>حفظ</button>
+        <button className="btn" onClick={disconnectAdo}>فصل</button>
+      </div>
+    </div>
+
+    <div className="sm:col-span-2">
+      <label className="block text-sm mb-1">المشروع</label>
+      <select
+        className="w-full border border-line rounded-lg h-10 px-3 bg-white"
+        value={adoProject}
+        onChange={(e) => setAdoProject(e.target.value)}
+      >
+        <option value="">— اختر مشروع —</option>
+        {adoProjects.map((p) => (
+          <option key={p.id} value={p.name}>{p.name}</option>
+        ))}
+      </select>
+      <p className="text-xs text-slate-500 mt-1">اختر MOHU لو ظهر في القائمة.</p>
+    </div>
+  </div>
+</section>
+
+
             <label className="block text-sm mb-1">API Base</label>
             <input
               className="w-full border border-line focus:border-blue-400 focus:ring-2 focus:ring-blue-100 rounded-lg h-10 px-3 mb-1 text-slate-900 placeholder-slate-500"
