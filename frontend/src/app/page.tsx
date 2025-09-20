@@ -767,16 +767,19 @@ export default function Home() {
   async function loadEpicsAndFeatures(epicId?: number | null) {
     setAdoBusy(true);
     try {
-      // Epics
       const ep = await fetch(`${getApiBase()}/ado/epics`, {
         headers: adoHeaders(),
       }).then((r) => r.json());
       setAdoEpics(ep);
 
-      // Features (يُمكن تصفيتها لاحقاً بالـ Epic المختار)
-      const ft = await fetch(`${getApiBase()}/ado/features`, {
-        headers: adoHeaders(),
-      }).then((r) => r.json());
+      const featuresUrl =
+        typeof epicId === "number"
+          ? `${getApiBase()}/ado/features?epicId=${epicId}`
+          : `${getApiBase()}/ado/features`;
+
+      const ft = await fetch(featuresUrl, { headers: adoHeaders() }).then((r) =>
+        r.json()
+      );
       setAdoFeatures(ft);
 
       if (typeof epicId === "number") setPickEpicId(epicId);
@@ -4073,9 +4076,9 @@ export default function Home() {
                     .filter((f) =>
                       !pickEpicId
                         ? true
-                        : (f.parentUrl || "").includes(
-                            `/workItems/${pickEpicId}`
-                          )
+                        : (f.parentUrl || "").match(
+                            /\/workItems\/(\d+)/i
+                          )?.[1] === String(pickEpicId)
                     )
                     .map((f) => (
                       <option key={f.id} value={f.id}>

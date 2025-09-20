@@ -1052,9 +1052,14 @@ app.get('/ado/features', async (req, res) => {
     }));
 
     if (epicId) {
-      const epicUrl = `${base}/_apis/wit/workItems/${epicId}`;
-      list = list.filter((f) => f.parentUrl && f.parentUrl.includes(epicUrl));
-    }
+  const isParentEpic = (url = '') => {
+         const m = url.match(/\/workItems\/(\d+)/i);
+     return m && Number(m[1]) === Number(epicId);
+   };
+   list = list.filter((f) => isParentEpic(f.parentUrl || ''));
+ }
+
+
     res.json(list);
   } catch (e) {
     res.status(e.status || 500).json({ error: e.message || 'features failed' });
