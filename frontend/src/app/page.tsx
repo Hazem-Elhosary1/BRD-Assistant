@@ -921,16 +921,41 @@ export default function Home() {
     if (id == null) return;
     setStoryTags((m) => ({ ...m, [id]: tag }));
   };
-  const onChatScroll = useCallback(() => {
-    const el = chatRef.current;
-    if (!el) return;
-    // لو نزل أكتر من 200px نعرض الزر
-    setShowScrollTop(el.scrollTop > 200);
-  }, []);
+// ⬇️ برا أي دالة/هوك، جوّه نفس الـComponent
+const scrollToTop = useCallback(() => {
+  const el = chatRef.current;
+  if (!el) return;
+  el.scrollTo({ top: 0, behavior: "smooth" });
+}, []);
 
-  const scrollToTop = useCallback(() => {
-    chatRef.current?.scrollTo({ top: 0, behavior: "smooth" });
-  }, []);
+const scrollToBottom = useCallback(() => {
+  const el = chatRef.current;
+  if (!el) return;
+  el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+}, []);
+
+const onChatScroll = useCallback(() => {
+  const el = chatRef.current;
+  if (!el) return;
+
+  const nearTop = el.scrollTop <= 16;
+  const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight <= 16;
+  const hasOverflow = el.scrollHeight > el.clientHeight + 40;
+
+  if (nearTop) {
+    // أنا فوق → خلّي الزر "ينزل لتحت"
+    setJumpDir("down");
+    setShowScrollTop(hasOverflow);
+  } else if (nearBottom) {
+    // أنا تحت → خلّي الزر "يطلع لفوق"
+    setJumpDir("up");
+    setShowScrollTop(hasOverflow);
+  } else {
+    // في النص: نفس سلوكك القديم
+    setJumpDir("up");
+    setShowScrollTop(el.scrollTop > 200);
+  }
+}, []);
 
   const tagColor = (t: Tag) =>
     t === "Critical"
@@ -972,6 +997,8 @@ export default function Home() {
   const [apiKey, setApiKey] = useState<string>("");
   const [apiBaseInput, setApiBaseInput] = useState<string>("");
   // Quick command bubbles
+  const [jumpDir, setJumpDir] = useState<'up' | 'down'>('up');
+
   const helpCmds = [
     {
       label: "تلخيص",
@@ -2676,21 +2703,24 @@ export default function Home() {
           className="flex-1 overflow-y-auto p-8 space-y-3 max-h-[calc(100vh-200px)]"
           onScroll={onChatScroll}
         >
-          <AnimatePresence>
-            {showScrollTop && (
-              <motion.button
-                key="scrollTopBtn"
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: 10 }}
-                onClick={scrollToTop}
-                className="absolute  right-[50%] bottom-[20%] p-2 rounded-full shadow-lg border bg-white hover:bg-slate-50 z-50 "
-                title="العودة لأعلى"
-              >
-                <ArrowUp className="w-5 h-5 text-slate-700" />
-              </motion.button>
-            )}
-          </AnimatePresence>
+         <AnimatePresence>
+  {showScrollTop && (
+    <motion.button
+      key="scrollJumpBtn"
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: 10 }}
+      onClick={jumpDir === 'up' ? scrollToTop : scrollToBottom}
+      className="absolute right-[50%] bottom-[20%] p-2 rounded-full shadow-lg border bg-white hover:bg-slate-50 z-50"
+      title={jumpDir === 'up' ? 'العودة لأعلى' : 'الذهاب لأسفل'}
+    >
+      {jumpDir === 'up'
+        ? <ArrowUp className="w-5 h-5 text-slate-700" />
+        : <ArrowDown className="w-5 h-5 text-slate-700" />}
+    </motion.button>
+  )}
+</AnimatePresence>
+
 
           <AnimatePresence initial={false}>
             {activeThread?.messages.map((m) => (
