@@ -100,11 +100,7 @@ async function extractTextFromUpload( upload ) {
 // ===== Helper: جلب المرفق من التخزين عبر ID =====
 // غيّرها بما يناسبك (SQLite/Prisma/GridFS/مسار على القرص)
 async function getUploadById( uploadId ) {
-  // مثال SQLite تخيّلي:
-  // const row = await db.get('SELECT mimetype, content, path FROM uploads WHERE id = ?', [uploadId]);
-  // return { mimetype: row.mimetype, buffer: row.content, path: row.path };
 
-  // Placeholder: ارجع null لو مش مطبق DB
   return null;
 }
 
@@ -951,6 +947,24 @@ async function createWorkItem({ base, project, pat, type, patch }) {
      { pat, method: 'POST', headers: ADO.patch, body: JSON.stringify(patch) }
    );
  }
+// PATCH update workitem by id (title/description/tags/parent...)
+app.patch('/ado/workitems/:id', async (req, res) => {
+  try {
+    const base = resolveBase(req);
+    const pat  = String(req.header('x-ado-pat') || '');
+    const id   = Number(req.params.id || 0);
+    const operations = Array.isArray(req.body?.operations) ? req.body.operations : [];
+    if (!base || !pat || !id) return res.status(400).json({ error: 'base/pat/id required' });
+
+    const result = await adoFetchWithApi(
+      base, `/_apis/wit/workitems/${id}`,
+      { pat, method: 'PATCH', headers: ADO.patch, body: JSON.stringify(operations) }
+    );
+    res.json(result);
+  } catch (e) {
+    res.status(e.status || 500).json({ error: e.message || 'update failed', urlTried: e.urlTried });
+  }
+});
 
 /* --------- 1) المشاريع --------- */
 app.get('/ado/projects', async (req, res) => {
@@ -1010,15 +1024,18 @@ app.post('/ado/epics', async (req, res) => {
     res.status(e.status || 500).json({ error: e.message || 'create epic failed' });
   }
 });
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 
 /* --------- 4) عرض Features (اختياريًا مفلترة بالـ Epic) --------- */
 app.get('/ado/features', async (req, res) => {
   try {
     const pat     = String(req.header('x-ado-pat') || '');
     const project = String(req.header('x-ado-project') || '');
-    const base    = resolveBase(req);
+    const base    = resolveBase(req);                    // ✅ هنا
     const epicId  = Number(req.query.epicId || 0);
-    if (!pat || !base || !project) return res.status(400).json({ error: 'base/pat/project required' });
+    if (!pat || !base || !project) {
+      return res.status(400).json({ error: 'base/pat/project required' });
+    }
 
     const items = await wiql({
       base, project, pat,
@@ -1043,6 +1060,7 @@ app.get('/ado/features', async (req, res) => {
     res.status(e.status || 500).json({ error: e.message || 'features failed' });
   }
 });
+
 
 /* --------- 5) إنشاء Feature (مع ربط Parent = Epic) --------- */
 app.post('/ado/features', async (req, res) => {
@@ -1103,6 +1121,9 @@ app.post('/ado/stories/bulk', async (req, res) => {
             url: `${base}/_apis/wit/workItems/${featureId}`,
             attributes: { name: 'Parent' },
         }},
+        (typeof s.priority === 'number')
+   ? { op: 'add', path: '/fields/Microsoft.VSTS.Common.Priority', value: s.priority }
+   : null,
         s.tags?.length ? { op: 'add', path: '/fields/System.Tags', value: s.tags.join('; ') } : null,
       ].filter(Boolean);
 

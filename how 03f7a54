@@ -1,0 +1,19 @@
+[33m03f7a54[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mdev[m[33m, [m[1;31morigin/dev[m[33m)[m integration with Azure DevOps
+[33mbc68c25[m improve Insights menu
+[33m88a94d1[m fix bug
+[33m62334ff[m fix flow chart
+[33m0c99a13[m[33m ([m[1;32mtest[m[33m)[m fix bug
+[33m38e68cc[m change favicon + fix proudact  backlog
+[33m6b06e86[m[33m ([m[1;31morigin/test[m[33m, [m[1;31morigin/main[m[33m, [m[1;32mmain[m[33m)[m fix bugs
+[33m3340345[m fix bugs
+[33mdef25c7[m chore: remove frontend .gitignore file
+[33m6aa5604[m chore: remove tracked node_modules; add root .gitignore; update backend & frontend
+[33m535f7c8[m feat: add timestamp to messages and implement server status check
+[33m0d0532d[m fix: replace input with a flexible textarea for better user experience
+[33mec87d27[m fix: remove unnecessary comment from Home component
+[33mdccef51[m chore: add frontend as regular folder
+[33md60ba79[m chore: remove frontend submodule reference
+[33m81f3bae[m fix: convert frontend from submodule to regular folder
+[33m907cc00[m chore: update frontend subproject commit to dirty state
+[33m1a035bd[m chore: initial commit (frontend + backend + config)
+[33me86fc15[m chore: initial commit (frontend + backend + config)

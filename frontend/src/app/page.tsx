@@ -124,6 +124,7 @@ import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import mermaid from "mermaid";
 // ------------------ End Imports ------------------
+type Priority = "P1" | "P2" | "P3" | "P4";
 
 /* -------------------------- Config -------------------------- */
 const DEFAULT_API_BASE =
@@ -318,9 +319,10 @@ export default function Home() {
   const [modalTag, setModalTag] = useState<Tag>("None");
   // أعلى الكومبوننت مع باقي الstates
   const [formTag, setFormTag] = useState<Tag>("None"); // ⬅️ جديد
-
   const [threads, setThreads] = useState<Thread[]>([]);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
+  const [epicId, setEpicId] = useState<string>("");
+
   // ===== ADO Settings =====
   const [adoOrg, setAdoOrg] = useState<string>("");
   const [adoPat, setAdoPat] = useState<string>(""); // سري
@@ -328,7 +330,6 @@ export default function Home() {
   const [adoProjects, setAdoProjects] = useState<
     Array<{ id: string; name: string }>
   >([]);
-  const [adoBusy, setAdoBusy] = useState(false);
   const isAdoConnected = !!adoOrg && !!adoPat; // مشروع اختياري لحد ما تختاره
   // helper لقراءة الثريد الحالي
   const activeThread = useMemo(
@@ -469,6 +470,23 @@ export default function Home() {
   const [theme, setTheme] = useState<"system" | "light" | "dark">("system");
   const [copiedId, setCopiedId] = useState<number | null>(null);
   const [showFlowchart, setShowFlowchart] = useState(false);
+  // === ADO Console state ===
+  const [showAdoConsole, setShowAdoConsole] = useState(false);
+  const [adoEpics, setAdoEpics] = useState<
+    Array<{ id: number; title: string }>
+  >([]);
+  const [adoFeatures, setAdoFeatures] = useState<
+    Array<{ id: number; title: string; parentUrl?: string | null }>
+  >([]);
+  const [pickEpicId, setPickEpicId] = useState<number | null>(null);
+  const [pickFeatureId, setPickFeatureId] = useState<number | null>(null);
+  const [newEpic, setNewEpic] = useState("");
+  const [newFeature, setNewFeature] = useState("");
+  const [adoBusy, setAdoBusy] = useState(false);
+
+  // Priority للستوري أثناء البوش
+  const [storyPriority, setStoryPriority] = useState<number | "">("");
+
   const [mermaidCode, setMermaidCode] = useState("");
   const [mermaidSvg, setMermaidSvg] = useState("");
   const [flowLoading, setFlowLoading] = useState(false);
@@ -480,6 +498,9 @@ export default function Home() {
   const [formTitle, setFormTitle] = useState("");
   const [formDesc, setFormDesc] = useState("");
   const [formAC, setFormAC] = useState("");
+  const [adoModalOpen, setAdoModalOpen] = useState(false);
+  const isBrowser = typeof window !== "undefined";
+  const getLS = (k: string) => (isBrowser ? localStorage.getItem(k) ?? "" : "");
   const [serverStatus, setServerStatus] = useState<"ok" | "fail" | "loading">(
     "loading"
   );
@@ -539,6 +560,7 @@ export default function Home() {
     const interval = setInterval(checkServer, 15000); // كل 15 ثانية
     return () => clearInterval(interval);
   }, []);
+
   useEffect(() => {
     if (!mermaidCode) return;
 
@@ -742,6 +764,109 @@ export default function Home() {
       toast.error("فشل الحذف");
     }
   }
+  async function loadEpicsAndFeatures(epicId?: number | null) {
+    setAdoBusy(true);
+    try {
+      // Epics
+      const ep = await fetch(`${getApiBase()}/ado/epics`, {
+        headers: adoHeaders(),
+      }).then((r) => r.json());
+      setAdoEpics(ep);
+
+      // Features (يُمكن تصفيتها لاحقاً بالـ Epic المختار)
+      const ft = await fetch(`${getApiBase()}/ado/features`, {
+        headers: adoHeaders(),
+      }).then((r) => r.json());
+      setAdoFeatures(ft);
+
+      if (typeof epicId === "number") setPickEpicId(epicId);
+    } finally {
+      setAdoBusy(false);
+    }
+  }
+
+  async function createEpic() {
+    if (!newEpic.trim()) return;
+    setAdoBusy(true);
+    try {
+      await fetch(`${getApiBase()}/ado/epics`, {
+        method: "POST",
+        headers: adoHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ title: newEpic.trim() }),
+      }).then((r) => r.json());
+      setNewEpic("");
+      await loadEpicsAndFeatures();
+    } finally {
+      setAdoBusy(false);
+    }
+  }
+
+  async function createFeature() {
+    if (!newFeature.trim()) return;
+    setAdoBusy(true);
+    try {
+      await fetch(`${getApiBase()}/ado/features`, {
+        method: "POST",
+        headers: adoHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({
+          title: newFeature.trim(),
+          epicId: pickEpicId ?? undefined,
+        }),
+      }).then((r) => r.json());
+      setNewFeature("");
+      await loadEpicsAndFeatures(pickEpicId ?? undefined);
+    } finally {
+      setAdoBusy(false);
+    }
+  }
+
+  async function pushCurrentStoryToADO() {
+    if (!selectedStory || !pickFeatureId) {
+      toast.error("اختر Feature أولاً");
+      return;
+    }
+    setAdoBusy(true);
+    try {
+      const body = {
+        featureId: Number(pickFeatureId),
+        stories: [
+          {
+            title: selectedStory.title,
+            description: selectedStory.description,
+            acceptance_criteria: selectedStory.acceptance_criteria || [],
+            priority: storyPriority || undefined,
+            // لو حابب تبعت Tags من التاج المحلي:
+            // tags: (storyTags[selectedStory.id ?? selectedStory.title] ? [storyTags[selectedStory.id ?? selectedStory.title]] : [])
+          },
+        ],
+      };
+      const res = await fetch(`${getApiBase()}/ado/stories/bulk`, {
+        method: "POST",
+        headers: adoHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      toast.success("تم دفع الستوري إلى ADO");
+      setShowAdoConsole(false);
+    } catch (e: unknown) {
+      const msg =
+        e instanceof Error
+          ? e.message
+          : typeof e === "string"
+          ? e
+          : (() => {
+              try {
+                return JSON.stringify(e);
+              } catch {
+                return "";
+              }
+            })();
+
+      toast.error(`فشل الدفع: ${msg || "خطأ غير معروف"}`);
+    } finally {
+      setAdoBusy(false);
+    }
+  }
 
   useEffect(() => {
     localStorage.setItem("theme", theme);
@@ -903,14 +1028,14 @@ export default function Home() {
       });
     }
   }, [activeThread?.messages]);
-useEffect(() => {
-  if (typeof window === "undefined") return;
-  setAdoBase(localStorage.getItem("ado_base") || "");
-  setAdoCollection(localStorage.getItem("ado_collection") || "");
-  setAdoOrg(localStorage.getItem("ado_org") || "");
-  setAdoProject(localStorage.getItem("ado_project") || "");
-  setAdoPat(sessionStorage.getItem("ado_pat") || "");
-}, []);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    setAdoBase(localStorage.getItem("ado_base") || "");
+    setAdoCollection(localStorage.getItem("ado_collection") || "");
+    setAdoOrg(localStorage.getItem("ado_org") || "");
+    setAdoProject(localStorage.getItem("ado_project") || "");
+    setAdoPat(sessionStorage.getItem("ado_pat") || "");
+  }, []);
   useEffect(() => {
     if (typeof window !== "undefined") {
       const sKey = localStorage.getItem("brd_api_key") || "";
@@ -1920,36 +2045,208 @@ useEffect(() => {
       </div>
     );
   }
-function saveAdoSettings() {
-  localStorage.setItem("ado_base", adoBase.trim());
-  localStorage.setItem("ado_collection", adoCollection.trim());
-  localStorage.setItem("ado_org", adoOrg.trim());
-  localStorage.setItem("ado_project", adoProject.trim());
-  if (adoPat) sessionStorage.setItem("ado_pat", adoPat); // PAT في sessionStorage
-  toast.success("تم حفظ إعدادات Azure DevOps");
-}
+  // --- ADO UI state ---
 
-function disconnectAdo() {
-  localStorage.removeItem("ado_base");
-  localStorage.removeItem("ado_collection");
-  localStorage.removeItem("ado_org");
-  localStorage.removeItem("ado_project");
-  sessionStorage.removeItem("ado_pat");
-  setAdoBase(""); setAdoCollection(""); setAdoOrg(""); setAdoProject(""); setAdoPat("");
-  setAdoProjects([]);
-  toast.info("تم فصل Azure DevOps");
-}
+  const [selectedEpic, setSelectedEpic] = useState<number | null>(null);
+  const [selectedFeature, setSelectedFeature] = useState<number | null>(null);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const e = localStorage.getItem("ado_selected_epic");
+    if (e) setSelectedEpic(Number(e));
+    const f = localStorage.getItem("ado_selected_feature");
+    if (f) setSelectedFeature(Number(f));
+  }, []);
 
-function adoHeaders(extra = {}) {
-  return getHeaders({
-    "x-ado-base": adoBase,
-    "x-ado-collection": adoCollection,
-    "x-ado-pat": adoPat,
-    "x-ado-project": adoProject,
-    ...extra, // ← دي مهمة
-  });
-}
+  function persistSel(key: string, val: number | null) {
+    if (val == null) localStorage.removeItem(key);
+    else localStorage.setItem(key, String(val));
+  }
 
+  // ---- API calls (Frontend -> Backend) ----
+  async function fetchProjects() {
+    setAdoBusy(true);
+    try {
+      const r = await fetch(`${getApiBase()}/ado/projects`, {
+        headers: adoHeaders(),
+      });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data?.error || "projects failed");
+      setAdoProjects(data);
+    } finally {
+      setAdoBusy(false);
+    }
+  }
+
+  async function refreshEpics() {
+    if (!adoProject) return;
+    setAdoBusy(true);
+    try {
+      const r = await fetch(`${getApiBase()}/ado/epics`, {
+        headers: adoHeaders(),
+      });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data?.error || "epics failed");
+      setAdoEpics(data);
+    } finally {
+      setAdoBusy(false);
+    }
+  }
+
+  async function refreshFeatures(epicId?: number | null) {
+    if (!adoProject) return;
+    setAdoBusy(true);
+    try {
+      const q = epicId ? `?epicId=${epicId}` : "";
+      const r = await fetch(`${getApiBase()}/ado/features${q}`, {
+        headers: adoHeaders(),
+      });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data?.error || "features failed");
+      setAdoFeatures(data);
+    } finally {
+      setAdoBusy(false);
+    }
+  }
+
+  async function createEpicInline() {
+    const title = prompt("عنوان الـEpic؟");
+    if (!title) return;
+    const description = prompt("وصف مختصر (اختياري)؟") || "";
+    const r = await fetch(`${getApiBase()}/ado/epics`, {
+      method: "POST",
+      headers: adoHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ title, description }),
+    });
+    const data = await r.json();
+    if (!r.ok) {
+      alert(data?.error || "create epic failed");
+      return;
+    }
+    await refreshEpics();
+    setSelectedEpic(data.id);
+    persistSel("ado_selected_epic", data.id);
+    await refreshFeatures(data.id);
+  }
+
+  async function createFeatureInline() {
+    const title = prompt("عنوان الـFeature؟");
+    if (!title) return;
+    const description = prompt("وصف مختصر (اختياري)؟") || "";
+    const r = await fetch(`${getApiBase()}/ado/features`, {
+      method: "POST",
+      headers: adoHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ title, description, epicId: selectedEpic }),
+    });
+    const data = await r.json();
+    if (!r.ok) {
+      alert(data?.error || "create feature failed");
+      return;
+    }
+    await refreshFeatures(selectedEpic);
+    setSelectedFeature(data.id);
+    persistSel("ado_selected_feature", data.id);
+  }
+
+  // Push كل الـStories المعروضة حاليًا (الـfilteredStories) على الـFeature المختار
+  async function pushStoriesToADO() {
+    if (!selectedFeature) {
+      alert("اختر Feature أولًا");
+      return;
+    }
+    if (!filteredStories.length) {
+      alert("لا توجد Stories ظاهرة للدفع");
+      return;
+    }
+
+    const payload = filteredStories.map((s) => ({
+      title: s.title,
+      description: s.description || "",
+      acceptance_criteria: Array.isArray(s.acceptance_criteria)
+        ? s.acceptance_criteria
+        : [],
+      tags: [String(storyTags[s.id ?? s.title] ?? "None")],
+    }));
+
+    setAdoBusy(true);
+    try {
+      const r = await fetch(`${getApiBase()}/ado/stories/bulk`, {
+        method: "POST",
+        headers: adoHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ featureId: selectedFeature, stories: payload }),
+      });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data?.error || "push failed");
+      toast.success(
+        `تم إنشاء ${data.created?.length ?? 0} Story على Azure DevOps`
+      );
+    } catch (e: unknown) {
+      const msg =
+        e instanceof Error
+          ? e.message
+          : typeof e === "string"
+          ? e
+          : "push failed";
+      toast.error(msg);
+    } finally {
+      setAdoBusy(false);
+    }
+  }
+
+  // أربط تغيّر الـEpic بتحميل الـFeatures
+  useEffect(() => {
+    if (selectedEpic != null) {
+      persistSel("ado_selected_epic", selectedEpic);
+      void refreshFeatures(selectedEpic);
+    } else {
+      persistSel("ado_selected_epic", null);
+    }
+  }, [selectedEpic]);
+
+  useEffect(() => {
+    persistSel("ado_selected_feature", selectedFeature ?? null);
+  }, [selectedFeature]);
+
+  // في أول مرة (لو متصل) هات المشاريع و الإبيكس/الفيتشرز
+  useEffect(() => {
+    if (adoBase || adoOrg) {
+      void fetchProjects();
+    }
+  }, [adoBase, adoOrg]);
+
+  function saveAdoSettings() {
+    localStorage.setItem("ado_base", adoBase.trim());
+    localStorage.setItem("ado_collection", adoCollection.trim());
+    localStorage.setItem("ado_org", adoOrg.trim());
+    localStorage.setItem("ado_project", adoProject.trim());
+    if (adoPat) sessionStorage.setItem("ado_pat", adoPat); // PAT في sessionStorage
+    toast.success("تم حفظ إعدادات Azure DevOps");
+  }
+
+  function disconnectAdo() {
+    localStorage.removeItem("ado_base");
+    localStorage.removeItem("ado_collection");
+    localStorage.removeItem("ado_org");
+    localStorage.removeItem("ado_project");
+    sessionStorage.removeItem("ado_pat");
+    setAdoBase("");
+    setAdoCollection("");
+    setAdoOrg("");
+    setAdoProject("");
+    setAdoPat("");
+    setAdoProjects([]);
+    toast.info("تم فصل Azure DevOps");
+  }
+
+  function adoHeaders(extra: Record<string, string> = {}): HeadersInit {
+    return getHeaders({
+      "Content-Type": "application/json",
+      ...extra,
+      "x-ado-base": String(adoBase || adoOrg || ""),
+      "x-ado-collection": String(adoCollection || ""),
+      "x-ado-project": String(adoProject || ""),
+      "x-ado-pat": String(adoPat || ""),
+    });
+  }
 
   const ActionButton = ({
     icon,
@@ -2712,6 +3009,42 @@ function adoHeaders(extra = {}) {
               {exportLoading ? <Spinner className="h-4 w-4" /> : "تصدير"}
             </button>
             {/* قائمة الصيغ تظهر فقط عند فتح الدروب داون */}
+            {/* Azure DevOps Panel */}
+            {/* داخل عمود اليسار */}
+
+            <section className="bg-surface rounded-xl shadow p-3 border border-line">
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="font-semibold text-slate-700 text-sm">
+                    Azure DevOps
+                  </div>
+                  <div className="text-[11px] text-slate-500 truncate">
+                    {(adoBase || adoOrg || "").replace(/^https?:\/\//, "") ||
+                      "—"}
+                  </div>
+                  <div className="text-[11px] text-slate-500">
+                    {adoProject || "—"}
+                  </div>
+                </div>
+                <button
+                  onClick={() => setAdoModalOpen(true)}
+                  className="px-3 h-9 rounded-lg border bg-white hover:bg-slate-50"
+                >
+                  فتح
+                </button>
+              </div>
+            </section>
+
+            {adoModalOpen && (
+              <AdoPushModal
+                onClose={() => setAdoModalOpen(false)}
+                stories={filteredStories} // أو أي قائمة Stories تريد دفعها
+                adoHeaders={adoHeaders} // الدالة اللي صلحناها
+                baseForLinks={(adoBase || adoOrg) as string}
+                project={adoProject || ""}
+              />
+            )}
+
             {showExportMenu && !exportLoading && (
               <div
                 className="absolute z-10 mt-2 bg-white border rounded-lg shadow-lg"
@@ -3190,104 +3523,129 @@ function adoHeaders(extra = {}) {
 
             {/* اعدادات Azure ui */}
             <section className="mt-4 p-3 rounded-lg border">
-  <div className="flex items-center justify-between mb-2">
-    <h4 className="font-semibold">Azure DevOps</h4>
-    {(adoBase && adoPat) ? (
-      <span className="badge badge--ok">Connected?</span>
-    ) : (
-      <span className="badge badge--warn">Not connected</span>
-    )}
-  </div>
+              <div className="flex items-center justify-between mb-2">
+                <h4 className="font-semibold">Azure DevOps</h4>
+                {adoBase && adoPat ? (
+                  <span className="badge badge--ok">Connected?</span>
+                ) : (
+                  <span className="badge badge--warn">Not connected</span>
+                )}
+              </div>
 
-  <div className="grid gap-3 sm:grid-cols-2">
-    <div>
-      <label className="block text-sm mb-1">Base URL</label>
-      <input
-        className="w-full border border-line rounded-lg h-10 px-3"
-        placeholder="https://azure.2p.com.sa"
-        value={adoBase}
-        onChange={(e) => setAdoBase(e.target.value)}
-      />
-      <p className="text-xs text-slate-500 mt-1">مثال: https://azure.2p.com.sa</p>
-    </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div>
+                  <label className="block text-sm mb-1">Base URL</label>
+                  <input
+                    className="w-full border border-line rounded-lg h-10 px-3"
+                    placeholder="https://azure.2p.com.sa"
+                    value={adoBase}
+                    onChange={(e) => setAdoBase(e.target.value)}
+                  />
+                  <p className="text-xs text-slate-500 mt-1">
+                    مثال: https://azure.2p.com.sa
+                  </p>
+                </div>
 
-    <div>
-      <label className="block text-sm mb-1">Collection (اختياري)</label>
-      <input
-        className="w-full border border-line rounded-lg h-10 px-3"
-        placeholder="Projects / DefaultCollection"
-        value={adoCollection}
-        onChange={(e) => setAdoCollection(e.target.value)}
-      />
-    </div>
+                <div>
+                  <label className="block text-sm mb-1">
+                    Collection (اختياري)
+                  </label>
+                  <input
+                    className="w-full border border-line rounded-lg h-10 px-3"
+                    placeholder="Projects / DefaultCollection"
+                    value={adoCollection}
+                    onChange={(e) => setAdoCollection(e.target.value)}
+                  />
+                </div>
 
-    <div>
-      <label className="block text-sm mb-1">Organization (لو dev.azure.com)</label>
-      <input
-        className="w-full border border-line rounded-lg h-10 px-3"
-        placeholder="example-org"
-        value={adoOrg}
-        onChange={(e) => setAdoOrg(e.target.value)}
-      />
-    </div>
+                <div>
+                  <label className="block text-sm mb-1">
+                    Organization (لو dev.azure.com)
+                  </label>
+                  <input
+                    className="w-full border border-line rounded-lg h-10 px-3"
+                    placeholder="example-org"
+                    value={adoOrg}
+                    onChange={(e) => setAdoOrg(e.target.value)}
+                  />
+                </div>
 
-    <div>
-      <label className="block text-sm mb-1">Personal Access Token (PAT)</label>
-      <input
-        type="password"
-        className="w-full border border-line rounded-lg h-10 px-3"
-        placeholder="••••••••••••"
-        value={adoPat}
-        onChange={(e) => setAdoPat(e.target.value)}
-      />
-      <p className="text-xs text-slate-500 mt-1">يُحفظ في <b>sessionStorage</b> فقط.</p>
-    </div>
+                <div>
+                  <label className="block text-sm mb-1">
+                    Personal Access Token (PAT)
+                  </label>
+                  <input
+                    type="password"
+                    className="w-full border border-line rounded-lg h-10 px-3"
+                    placeholder="••••••••••••"
+                    value={adoPat}
+                    onChange={(e) => setAdoPat(e.target.value)}
+                  />
+                  <p className="text-xs text-slate-500 mt-1">
+                    يُحفظ في <b>sessionStorage</b> فقط.
+                  </p>
+                </div>
 
-    <div className="sm:col-span-2">
-      <div className="flex items-center gap-2">
-        <button
-          className="btn btn-ghost"
-          disabled={adoBusy || !adoBase || !adoPat}
-          onClick={async () => {
-            try {
-              setAdoBusy(true);
-              const r = await fetch(getApiBase() + "/ado/projects", { headers: adoHeaders() });
-              if (!r.ok) throw new Error(`HTTP ${r.status}`);
-              const data = await r.json();
-              setAdoProjects(data);
-              toast.success("تم الاتصال وجلب المشاريع");
-            } catch (e) {
-              toast.error("فشل الاتصال — جرّب تعبئة Collection أيضًا");
-            } finally {
-              setAdoBusy(false);
-            }
-          }}
-        >
-          اختبار الاتصال وجلب المشاريع
-        </button>
+                <div className="sm:col-span-2">
+                  <div className="flex items-center gap-2">
+                    <button
+                      className="btn btn-ghost"
+                      disabled={adoBusy || !adoBase || !adoPat}
+                      onClick={async () => {
+                        try {
+                          setAdoBusy(true);
+                          const r = await fetch(
+                            getApiBase() + "/ado/projects",
+                            { headers: adoHeaders() }
+                          );
+                          if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                          const data = await r.json();
+                          setAdoProjects(data);
+                          toast.success("تم الاتصال وجلب المشاريع");
+                        } catch (e) {
+                          toast.error(
+                            "فشل الاتصال — جرّب تعبئة Collection أيضًا"
+                          );
+                        } finally {
+                          setAdoBusy(false);
+                        }
+                      }}
+                    >
+                      اختبار الاتصال وجلب المشاريع
+                    </button>
 
-        <button className="btn btn-primary ms-auto" onClick={saveAdoSettings}>حفظ</button>
-        <button className="btn" onClick={disconnectAdo}>فصل</button>
-      </div>
-    </div>
+                    <button
+                      className="btn btn-primary ms-auto"
+                      onClick={saveAdoSettings}
+                    >
+                      حفظ
+                    </button>
+                    <button className="btn" onClick={disconnectAdo}>
+                      فصل
+                    </button>
+                  </div>
+                </div>
 
-    <div className="sm:col-span-2">
-      <label className="block text-sm mb-1">المشروع</label>
-      <select
-        className="w-full border border-line rounded-lg h-10 px-3 bg-white"
-        value={adoProject}
-        onChange={(e) => setAdoProject(e.target.value)}
-      >
-        <option value="">— اختر مشروع —</option>
-        {adoProjects.map((p) => (
-          <option key={p.id} value={p.name}>{p.name}</option>
-        ))}
-      </select>
-      <p className="text-xs text-slate-500 mt-1">اختر MOHU لو ظهر في القائمة.</p>
-    </div>
-  </div>
-</section>
-
+                <div className="sm:col-span-2">
+                  <label className="block text-sm mb-1">المشروع</label>
+                  <select
+                    className="w-full border border-line rounded-lg h-10 px-3 bg-white"
+                    value={adoProject}
+                    onChange={(e) => setAdoProject(e.target.value)}
+                  >
+                    <option value="">— اختر مشروع —</option>
+                    {adoProjects.map((p) => (
+                      <option key={p.id} value={p.name}>
+                        {p.name}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="text-xs text-slate-500 mt-1">
+                    اختر MOHU لو ظهر في القائمة.
+                  </p>
+                </div>
+              </div>
+            </section>
 
             <label className="block text-sm mb-1">API Base</label>
             <input
@@ -3556,6 +3914,36 @@ function adoHeaders(extra = {}) {
               <div className="ms-auto flex items-center gap-2">
                 {!editMode ? (
                   <>
+                    {/* Priority اختياري قبل الدفع */}
+                    <select
+                      className="h-10 rounded-lg border border-line text-sm px-2"
+                      value={storyPriority}
+                      onChange={(e) =>
+                        setStoryPriority(
+                          e.target.value ? Number(e.target.value) : ""
+                        )
+                      }
+                      title="Priority (1 أعلى)"
+                    >
+                      <option value="">Priority</option>
+                      <option value="1">1 (Highest)</option>
+                      <option value="2">2</option>
+                      <option value="3">3</option>
+                      <option value="4">4 (Lowest)</option>
+                    </select>
+
+                    {/* فتح كونسول ADO لاختيار Epic/Feature ثم Push */}
+                    <button
+                      onClick={async () => {
+                        setShowAdoConsole(true);
+                        await loadEpicsAndFeatures();
+                      }}
+                      className="px-3 h-10 rounded-lg border text-blue-600 hover:bg-blue-50"
+                      title="Push to Azure DevOps"
+                    >
+                      ADO دفع
+                    </button>
+
                     <button
                       onClick={() => setEditMode(true)}
                       className="px-4 h-10 rounded-lg border hover:bg-slate-50"
@@ -3613,6 +4001,123 @@ function adoHeaders(extra = {}) {
       )}
 
       {/* Flowchart Modal */}
+      {/* ADO Console Modal */}
+      {showAdoConsole && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50"
+          onClick={() => setShowAdoConsole(false)}
+        >
+          <div
+            className="bg-surface rounded-2xl shadow-xl ring-1 ring-line w-[min(800px,95vw)]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-5 py-3 border-b">
+              <h4 className="text-lg font-semibold">Azure DevOps Console</h4>
+              <button
+                onClick={() => setShowAdoConsole(false)}
+                className="h-9 w-9 rounded-lg border"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4">
+              {/* اختيار Epic */}
+              <div className="flex items-center gap-2">
+                <label className="w-28 text-sm text-slate-600">Epic</label>
+                <select
+                  className="flex-1 h-10 rounded-lg border px-2"
+                  value={pickEpicId ?? ""}
+                  onChange={(e) =>
+                    setPickEpicId(
+                      e.target.value ? Number(e.target.value) : null
+                    )
+                  }
+                >
+                  <option value="">— اختر Epic —</option>
+                  {adoEpics.map((e) => (
+                    <option key={e.id} value={e.id}>
+                      {e.title}
+                    </option>
+                  ))}
+                </select>
+                <input
+                  className="h-10 rounded-lg border px-2"
+                  placeholder="Epic جديد…"
+                  value={newEpic}
+                  onChange={(e) => setNewEpic(e.target.value)}
+                />
+                <button
+                  onClick={createEpic}
+                  disabled={!newEpic || adoBusy}
+                  className="h-10 px-3 rounded-lg border"
+                >
+                  إنشاء
+                </button>
+              </div>
+
+              {/* اختيار Feature */}
+              <div className="flex items-center gap-2">
+                <label className="w-28 text-sm text-slate-600">Feature</label>
+                <select
+                  className="flex-1 h-10 rounded-lg border px-2"
+                  value={pickFeatureId ?? ""}
+                  onChange={(e) =>
+                    setPickFeatureId(
+                      e.target.value ? Number(e.target.value) : null
+                    )
+                  }
+                >
+                  <option value="">— اختر Feature —</option>
+                  {adoFeatures
+                    .filter((f) =>
+                      !pickEpicId
+                        ? true
+                        : (f.parentUrl || "").includes(
+                            `/workItems/${pickEpicId}`
+                          )
+                    )
+                    .map((f) => (
+                      <option key={f.id} value={f.id}>
+                        {f.title}
+                      </option>
+                    ))}
+                </select>
+                <input
+                  className="h-10 rounded-lg border px-2"
+                  placeholder="Feature جديدة…"
+                  value={newFeature}
+                  onChange={(e) => setNewFeature(e.target.value)}
+                />
+                <button
+                  onClick={createFeature}
+                  disabled={!newFeature || adoBusy}
+                  className="h-10 px-3 rounded-lg border"
+                >
+                  إنشاء
+                </button>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 px-5 py-3 border-t">
+              <button
+                onClick={() => setShowAdoConsole(false)}
+                className="h-10 px-4 rounded-lg border"
+              >
+                إلغاء
+              </button>
+              <button
+                onClick={pushCurrentStoryToADO}
+                disabled={!pickFeatureId || adoBusy}
+                className="h-10 px-4 rounded-lg bg-blue-600 text-white"
+              >
+                {adoBusy ? "جارٍ الدفع…" : "Push"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {showFlowchart && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
           <motion.div
@@ -3729,5 +4234,330 @@ function MermaidChart({ stories }: { stories: Story[] }) {
       className="overflow-auto bg-white rounded-lg border p-4"
       style={{ minHeight: 300, maxHeight: 500 }}
     />
+  );
+}
+
+// ===== ADO Push Modal =====
+type AdoPushModalProps = {
+  onClose: () => void;
+  stories: Story[];
+  adoHeaders: (extra?: Record<string, string>) => HeadersInit;
+  baseForLinks: string; // https://azure.2p.com.sa أو https://dev.azure.com/org
+  project: string; // اسم المشروع المختار (مثلاً MOHU)
+};
+
+function AdoPushModal({
+  onClose,
+  stories,
+  adoHeaders,
+  baseForLinks,
+  project,
+}: AdoPushModalProps) {
+  const apiBase = getApiBase();
+
+  const [busy, setBusy] = React.useState(false);
+  const [epics, setEpics] = React.useState<
+    Array<{ id: number; title: string }>
+  >([]);
+  const [features, setFeatures] = React.useState<
+    Array<{ id: number; title: string }>
+  >([]);
+  const [epicId, setEpicId] = React.useState<string>(""); // نخزن كـ string
+  const [featureId, setFeatureId] = React.useState<string>(""); // نخزن كـ string
+  const [newEpic, setNewEpic] = React.useState("");
+  const [newFeature, setNewFeature] = React.useState("");
+  const [priority, setPriority] = React.useState<"P1" | "P2" | "P3" | "P4">(
+    "P3"
+  );
+
+  const h = adoHeaders(); // يقرأ الهيدرز من إعداداتك الحالية
+
+  React.useEffect(() => {
+    void loadEpics();
+  }, []);
+
+  async function loadEpics() {
+    try {
+      setBusy(true);
+      const e = await fetchJSON<Array<{ id: number; title: string }>>(
+        `${apiBase}/ado/epics`,
+        { headers: h }
+      );
+      setEpics(e);
+      if (e.length) {
+        setEpicId(String(e[0].id));
+        await loadFeatures(e[0].id);
+      } else {
+        setEpicId("");
+        setFeatures([]);
+        setFeatureId("");
+      }
+    } catch (err) {
+      toast.error(errorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function loadFeatures(epic?: number) {
+    try {
+      setBusy(true);
+      const url = epic
+        ? `${apiBase}/ado/features?epicId=${epic}`
+        : `${apiBase}/ado/features`;
+      const f = await fetchJSON<Array<{ id: number; title: string }>>(url, {
+        headers: h,
+      });
+      setFeatures(f);
+      if (f.length) setFeatureId(String(f[0].id));
+      else setFeatureId("");
+    } catch (err) {
+      toast.error(errorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function createEpic() {
+    if (!newEpic.trim()) return;
+    try {
+      setBusy(true);
+      const w = await fetchJSON<{ id: number; title: string }>(
+        `${apiBase}/ado/epics`,
+        {
+          method: "POST",
+          headers: { ...h, "Content-Type": "application/json" },
+          body: JSON.stringify({ title: newEpic }),
+        }
+      );
+      setEpics([w, ...epics]);
+      setEpicId(String(w.id)); // ✅ state = string
+      await loadFeatures(Number(w.id)); // لو loadFeatures بتستقبل رقم
+      toast.success("تم إنشاء Epic");
+      await loadFeatures(w.id);
+    } catch (err) {
+      toast.error(errorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function createFeature() {
+    if (!newFeature.trim()) return;
+    if (!epicId) return toast.error("اختر Epic أولًا");
+    try {
+      setBusy(true);
+      const w = await fetchJSON<{ id: number; title: string }>(
+        `${apiBase}/ado/features`,
+        {
+          method: "POST",
+          headers: { ...h, "Content-Type": "application/json" },
+          body: JSON.stringify({ title: newFeature, epicId }),
+        }
+      );
+      setFeatures([w, ...features]); // ✅ صحّح الـtypo
+      setFeatureId(String(w.id)); // ✅ خزّن كـ string عشان <select>
+
+      setNewFeature("");
+      toast.success("تم إنشاء Feature");
+    } catch (err) {
+      toast.error(errorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function pushStories() {
+    if (!featureId) return toast.error("اختر Feature أولًا");
+    try {
+      setBusy(true);
+      // هنضيف الأولوية كـ Tag بسيطة عشان السيرفر الحالي يحطها Tags
+      type StoryWithTags = Story & { tags?: string[] };
+
+      const payload = {
+        featureId: Number(featureId), // مهم لو مخزّنها string في الواجهة
+        stories: stories.map((s) => {
+          const existing = (s as StoryWithTags).tags ?? [];
+          // فلترة + إزالة تكرار (احتياطي)
+          const nextTags = Array.from(
+            new Set([
+              ...existing.filter((t): t is string => typeof t === "string"),
+              `Priority:${priority}`,
+            ])
+          );
+          return { ...s, tags: nextTags };
+        }),
+      };
+
+      const out = await fetchJSON<{
+        ok: boolean;
+        created: { id: number; title: string; url: string }[];
+      }>(`${apiBase}/ado/stories/bulk`, {
+        method: "POST",
+        headers: { ...h, "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      toast.success(`تم إنشاء ${out.created.length} عنصر`);
+      onClose();
+      // افتح صفحة Azure DevOps كمرجع سريع
+      try {
+        window.open(
+          `${baseForLinks}/${encodeURIComponent(
+            project
+          )}/_workitems/recentlyupdated/`,
+          "_blank"
+        );
+      } catch {}
+    } catch (err) {
+      toast.error(errorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center">
+      {/* Backdrop */}
+      <div className="absolute inset-0 bg-black/40" onClick={onClose} />
+
+      {/* Dialog */}
+      <motion.div
+        initial={{ opacity: 0, scale: 0.98 }}
+        animate={{ opacity: 1, scale: 1 }}
+        className="relative w-[min(720px,95vw)] bg-surface rounded-2xl shadow-xl ring-1 ring-line p-4"
+        role="dialog"
+        aria-modal="true"
+      >
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-lg font-semibold">
+            دفع Stories إلى Azure DevOps
+          </h3>
+          <button
+            onClick={onClose}
+            className="h-9 w-9 inline-flex items-center justify-center rounded-lg border"
+          >
+            ✕
+          </button>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {/* Epic */}
+          <div>
+            <div className="text-xs text-slate-500 mb-1">Epic</div>
+            <div className="flex gap-2">
+              <select
+                className="flex-1 h-10 rounded border border-line px-2"
+                value={epicId}
+                onChange={(e) => {
+                  const v = e.target.value; // string
+                  setEpicId(v);
+                  void loadFeatures(v ? Number(v) : undefined);
+                }}
+              >
+                <option value="">— اختر Epic —</option>
+                {epics.map((e) => (
+                  <option key={e.id} value={String(e.id)}>
+                    {e.title}
+                  </option>
+                ))}
+              </select>
+              <button onClick={loadEpics} className="h-10 px-3 rounded border">
+                تحديث
+              </button>
+            </div>
+            <div className="flex gap-2 mt-2">
+              <input
+                value={newEpic}
+                onChange={(e) => setNewEpic(e.target.value)}
+                className="flex-1 h-10 rounded border border-line px-2"
+                placeholder="Epic جديد…"
+              />
+              <button
+                onClick={createEpic}
+                className="h-10 px-3 rounded bg-blue-600 text-white disabled:opacity-60"
+                disabled={busy}
+              >
+                + إنشاء
+              </button>
+            </div>
+          </div>
+
+          {/* Feature */}
+          <div>
+            <div className="text-xs text-slate-500 mb-1">Feature</div>
+            <div className="flex gap-2">
+              <select
+                className="flex-1 h-10 rounded border border-line px-2"
+                value={featureId}
+                onChange={(e) => setFeatureId(e.target.value)}
+              >
+                <option value="">— اختر Feature —</option>
+                {features.map((f) => (
+                  <option key={f.id} value={String(f.id)}>
+                    {f.title}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="flex gap-2 mt-2">
+              <input
+                value={newFeature}
+                onChange={(e) => setNewFeature(e.target.value)}
+                className="flex-1 h-10 rounded border border-line px-2"
+                placeholder="Feature جديدة…"
+              />
+              <button
+                onClick={createFeature}
+                className="h-10 px-3 rounded bg-blue-600 text-white disabled:opacity-60"
+                disabled={busy || !epicId}
+              >
+                + إنشاء
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* Priority + count */}
+        <div className="flex items-center justify-between mt-4">
+          <div className="flex items-center gap-3">
+            <span className="text-sm text-slate-600">الأولوية:</span>
+            <select
+              className="h-9 rounded border border-line px-2"
+              value={priority}
+              onChange={(e: React.ChangeEvent<HTMLSelectElement>) =>
+                setPriority(e.target.value as Priority)
+              }
+            >
+              <option value="P1">P1</option>
+              <option value="P2">P2</option>
+              <option value="P3">P3</option>
+              <option value="P4">P4</option>
+            </select>
+          </div>
+          <div className="text-sm text-slate-600">
+            سيتم دفع {stories.length} Story
+          </div>
+        </div>
+
+        <div className="flex items-center justify-end gap-2 mt-4">
+          <button onClick={onClose} className="px-3 h-10 rounded-lg border">
+            إلغاء
+          </button>
+          <button
+            onClick={pushStories}
+            disabled={busy || !featureId}
+            className="px-4 h-10 rounded-lg text-white bg-blue-600 disabled:opacity-60"
+          >
+            {busy ? (
+              <span className="inline-flex items-center gap-2">
+                <Spinner className="h-4 w-4" /> جارٍ الدفع…
+              </span>
+            ) : (
+              "دفع إلى Azure DevOps"
+            )}
+          </button>
+        </div>
+      </motion.div>
+    </div>
   );
 }
